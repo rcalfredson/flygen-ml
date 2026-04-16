@@ -1,0 +1,10 @@
+feature_set: sequence_v1
+channels:
+  - x_rel
+  - y_rel
+  - r
+  - speed
+  - heading_change
+target_length: 128
+
+# TODO: confirm channel list and normalization after canonical segment semantics are verified.

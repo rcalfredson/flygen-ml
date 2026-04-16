@@ -1,0 +1,5 @@
+model_name: segment_meanpool_v1
+model_kind: sequence_meanpool
+group_key: fly_id
+
+# TODO: scaffold only. Sequence model implementation is out of scope for the first semantic pass.

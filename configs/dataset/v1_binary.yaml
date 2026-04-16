@@ -1,0 +1,8 @@
+dataset_name: v1_binary
+supported_chamber: large
+training_idx: 1
+segment_definition: canonical_between_reward_v1
+reward_stream: calculated_experimental_fly
+
+# TODO: confirm whether training_idx should be 0-based or 1-based in user-facing configs.
+# TODO: confirm chamber label against trusted fixtures and upstream expectations.

@@ -1,0 +1,6 @@
+model_name: logreg_v1
+model_kind: baseline
+group_key: fly_id
+random_seed: 7
+
+# TODO: add concrete estimator hyperparameters once modeling dependencies are chosen.

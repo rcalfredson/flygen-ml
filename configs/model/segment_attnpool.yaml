@@ -1,0 +1,5 @@
+model_name: segment_attnpool_v1
+model_kind: sequence_attnpool
+group_key: fly_id
+
+# TODO: scaffold only. Attention pooling is a later v1-plus experiment.

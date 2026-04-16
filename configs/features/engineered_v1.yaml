@@ -1,0 +1,10 @@
+feature_set: engineered_v1
+aggregation:
+  - mean
+  - median
+  - std
+  - p25
+  - p75
+  - count
+
+# TODO: lock the initial engineered feature list after fixture-backed segment validation.
