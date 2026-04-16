@@ -1,0 +1,20 @@
+{
+  "fixtures": [
+    {
+      "fixture_id": "c42_2024_11_10_13_49_12",
+      "sample_key": "c42__2024-11-10__13-49-12",
+      "data_path": "/media/Synology4/Yang Chen/2024-11-10/c42__2024-11-10__13-49-12.data",
+      "trx_path": "/media/Synology4/Yang Chen/2024-11-10/c42__2024-11-10__13-49-12.trx",
+      "notes": "Arbitrarily selected starting fixture for local semantic validation.",
+      "expected": {
+        "protocol_ct": null,
+        "experimental_fly_indices": null,
+        "training_idx": null,
+        "training_start_frame": null,
+        "training_end_frame": null,
+        "calculated_reward_count": null,
+        "canonical_segment_count": null
+      }
+    }
+  ]
+}
