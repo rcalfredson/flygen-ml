@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import pickle
+import warnings
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 
 class _LegacyPlaceholder:
@@ -19,7 +22,15 @@ class LegacyCompatibleUnpickler(pickle.Unpickler):
 
 def load_pickle(path: str | Path) -> Any:
     with Path(path).open("rb") as handle:
-        return LegacyCompatibleUnpickler(handle, encoding="latin1").load()
+        with warnings.catch_warnings():
+            # Some legacy NumPy dtypes inside upstream-style pickles emit a
+            # compatibility warning under newer NumPy releases during unpickling.
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*align should be passed as Python or NumPy boolean.*",
+                category=np.exceptions.VisibleDeprecationWarning,
+            )
+            return LegacyCompatibleUnpickler(handle, encoding="latin1").load()
 
 
 def load_recording_pair(data_path: str | Path, trx_path: str | Path) -> tuple[dict[str, Any], dict[str, Any]]:
