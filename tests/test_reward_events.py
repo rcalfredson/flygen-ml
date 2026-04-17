@@ -2,15 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from flygen_ml.loaders.pickle_loader import load_recording_pair
-from flygen_ml.loaders.protocol_parser import (
-    get_experimental_fly_indices,
-    get_protocol,
-    get_selected_training_bounds,
-)
-from flygen_ml.schema import ManifestRow, NormalizedRecording
 from flygen_ml.segments.reward_events import extract_reward_events
 
+from tests.fixture_builders import build_fixture_recording
 from tests.fixture_registry import optional_expected_value, require_available_fixture
 
 
@@ -49,48 +43,10 @@ def _summarize_reward_metadata(protocol: dict, *, fly_idx: int, training_idx: in
 
     return "\n".join(lines)
 
-
-def _build_stub_recording(
-    fixture,
-    protocol: dict,
-    raw_data: dict,
-    raw_trx: dict,
-    *,
-    fly_idx: int,
-    training_idx: int,
-    training_start_frame: int,
-    training_end_frame: int,
-) -> NormalizedRecording:
-    return NormalizedRecording(
-        sample_key=fixture.sample_key,
-        manifest=ManifestRow(
-            sample_key=fixture.sample_key,
-            data_path=fixture.data_path,
-            trx_path=fixture.trx_path,
-            genotype="unknown",
-            chamber=optional_expected_value(fixture, "protocol_ct") or "unknown",
-            training_idx=training_idx,
-            fly_idx=fly_idx,
-        ),
-        chamber_type=optional_expected_value(fixture, "protocol_ct") or "unknown",
-        experimental_fly_idx=fly_idx,
-        training_idx=training_idx,
-        training_start_frame=training_start_frame,
-        training_end_frame=training_end_frame,
-        fps=float("nan"),
-        timestamps=raw_trx.get("ts"),
-        x_by_fly=raw_trx.get("x"),
-        y_by_fly=raw_trx.get("y"),
-        protocol=protocol,
-        raw_data=raw_data,
-        raw_trx=raw_trx,
-    )
-
-
 def test_reward_event_extraction_fixture():
     fixture = require_available_fixture()
-    raw_data, raw_trx = load_recording_pair(fixture.data_path, fixture.trx_path)
-    protocol = get_protocol(raw_data)
+    recording, context = build_fixture_recording(fixture)
+    protocol = context["protocol"]
 
     expected_training_number = optional_expected_value(fixture, "training_number")
     expected_start = optional_expected_value(fixture, "training_start_frame")
@@ -98,8 +54,7 @@ def test_reward_event_extraction_fixture():
     expected_count = optional_expected_value(fixture, "calculated_reward_count")
     expected_frames_preview = optional_expected_value(fixture, "calculated_reward_frames_preview")
 
-    experimental_fly_indices = get_experimental_fly_indices(protocol)
-    fly_idx = experimental_fly_indices[0]
+    fly_idx = context["fly_idx"]
 
     if any(value is None for value in (expected_training_number, expected_start, expected_end)):
         pytest.fail(
@@ -110,24 +65,8 @@ def test_reward_event_extraction_fixture():
 
     training_idx = expected_training_number - 1
 
-    training_start_frame, training_end_frame = get_selected_training_bounds(
-        protocol,
-        fly_idx=fly_idx,
-        training_idx=training_idx,
-    )
-    assert training_start_frame == expected_start
-    assert training_end_frame == expected_end
-
-    recording = _build_stub_recording(
-        fixture,
-        protocol,
-        raw_data,
-        raw_trx,
-        fly_idx=fly_idx,
-        training_idx=training_idx,
-        training_start_frame=training_start_frame,
-        training_end_frame=training_end_frame,
-    )
+    assert context["training_start_frame"] == expected_start
+    assert context["training_end_frame"] == expected_end
     reward_events = extract_reward_events(recording)
 
     if any(value is None for value in (expected_count, expected_frames_preview)):

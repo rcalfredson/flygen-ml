@@ -24,8 +24,46 @@
         "training_start_frame": 40792,
         "training_end_frame": 67793,
         "calculated_reward_count": 320,
-        "calculated_reward_frames_preview": [40835, 40848, 40858, 40936, 40950],
-        "canonical_segment_count": null
+        "calculated_reward_frames_preview": [
+          40835,
+          40848,
+          40858,
+          40936,
+          40950
+        ],
+        "canonical_segment_count": 320,
+        "canonical_segment_preview": [
+          {
+            "anchor_reward_frame": 40835,
+            "start_frame": 40840,
+            "stop_frame": 40848,
+            "end_reward_frame": 40848
+          },
+          {
+            "anchor_reward_frame": 40848,
+            "start_frame": 40853,
+            "stop_frame": 40858,
+            "end_reward_frame": 40858
+          },
+          {
+            "anchor_reward_frame": 40858,
+            "start_frame": 40859,
+            "stop_frame": 40936,
+            "end_reward_frame": 40936
+          },
+          {
+            "anchor_reward_frame": 40936,
+            "start_frame": 40938,
+            "stop_frame": 40950,
+            "end_reward_frame": 40950
+          },
+          {
+            "anchor_reward_frame": 40950,
+            "start_frame": 40951,
+            "stop_frame": 41215,
+            "end_reward_frame": 41215
+          }
+        ]
       }
     }
   ]
