@@ -7,11 +7,22 @@
       "trx_path": "/media/Synology4/Yang Chen/2024-11-10/c42__2024-11-10__13-49-12.trx",
       "notes": "Arbitrarily selected starting fixture for local semantic validation.",
       "expected": {
-        "protocol_ct": null,
-        "experimental_fly_indices": null,
-        "training_idx": null,
-        "training_start_frame": null,
-        "training_end_frame": null,
+        "protocol_ct": "htl",
+        "experimental_fly_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "training_number": 2,
+        "training_start_frame": 40792,
+        "training_end_frame": 67793,
         "calculated_reward_count": null,
         "canonical_segment_count": null
       }
