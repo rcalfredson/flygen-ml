@@ -23,7 +23,8 @@
         "training_number": 2,
         "training_start_frame": 40792,
         "training_end_frame": 67793,
-        "calculated_reward_count": null,
+        "calculated_reward_count": 320,
+        "calculated_reward_frames_preview": [40835, 40848, 40858, 40936, 40950],
         "canonical_segment_count": null
       }
     }
