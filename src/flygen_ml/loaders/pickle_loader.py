@@ -20,6 +20,9 @@ class LegacyCompatibleUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 
+VISIBLE_DEPRECATION_WARNING = getattr(np, "VisibleDeprecationWarning", Warning)
+
+
 def load_pickle(path: str | Path) -> Any:
     with Path(path).open("rb") as handle:
         with warnings.catch_warnings():
@@ -28,7 +31,7 @@ def load_pickle(path: str | Path) -> Any:
             warnings.filterwarnings(
                 "ignore",
                 message=r".*align should be passed as Python or NumPy boolean.*",
-                category=np.exceptions.VisibleDeprecationWarning,
+                category=VISIBLE_DEPRECATION_WARNING,
             )
             return LegacyCompatibleUnpickler(handle, encoding="latin1").load()
 

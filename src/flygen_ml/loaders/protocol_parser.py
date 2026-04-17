@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -31,8 +32,31 @@ def get_selected_training_bounds(
     fly_idx: int,
     training_idx: int,
 ) -> tuple[int, int]:
-    # TODO: replace this placeholder with fixture-backed parsing of training boundaries.
-    raise NotImplementedError(
-        "Training-boundary parsing is not implemented yet. "
-        "Verify selected-training semantics against trusted fixtures before implementing."
-    )
+    frame_nums = protocol.get("frameNums")
+    if isinstance(frame_nums, list):
+        if fly_idx < 0 or fly_idx >= len(frame_nums):
+            raise IndexError(f"fly_idx {fly_idx} out of range for frameNums with length {len(frame_nums)}")
+        fly_frame_nums = frame_nums[fly_idx]
+    else:
+        fly_frame_nums = frame_nums
+
+    if not isinstance(fly_frame_nums, dict):
+        raise ValueError("selected frameNums entry is missing or is not a mapping")
+
+    start_train = fly_frame_nums.get("startTrain")
+    start_post = fly_frame_nums.get("startPost")
+    if not isinstance(start_train, Sequence) or isinstance(start_train, (str, bytes)):
+        raise ValueError('selected frameNums entry is missing "startTrain" sequence')
+    if not isinstance(start_post, Sequence) or isinstance(start_post, (str, bytes)):
+        raise ValueError('selected frameNums entry is missing "startPost" sequence')
+
+    if training_idx < 0 or training_idx >= len(start_train):
+        raise IndexError(
+            f"training_idx {training_idx} out of range for startTrain with length {len(start_train)}"
+        )
+    if training_idx < 0 or training_idx >= len(start_post):
+        raise IndexError(
+            f"training_idx {training_idx} out of range for startPost with length {len(start_post)}"
+        )
+
+    return int(start_train[training_idx]), int(start_post[training_idx])
