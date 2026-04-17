@@ -50,13 +50,20 @@ class SegmentRecord:
     sample_key: str
     fly_id: str
     genotype: str
+    chamber_type: str
+    experimental_fly_idx: int
+    data_path: Path
+    trx_path: Path
     training_idx: int
+    training_start_frame: int
+    training_end_frame: int
     anchor_reward_frame: int
     start_frame: int
     stop_frame: int
     end_reward_frame: int | None
     duration_frames: int
     n_finite_frames: int
+    finite_frame_fraction: float
     qc_flags: tuple[str, ...] = ()
     reward_center_x: float | None = None
     reward_center_y: float | None = None

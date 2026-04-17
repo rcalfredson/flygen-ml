@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from flygen_ml.loaders.protocol_parser import (
     get_chamber_type,
     get_experimental_fly_indices,
@@ -12,9 +14,16 @@ from flygen_ml.schema import ManifestRow, NormalizedRecording
 
 
 def infer_fps(timestamps: Any) -> float:
-    # TODO: replace with a robust implementation once real fixtures are available.
-    del timestamps
-    raise NotImplementedError("FPS inference is not implemented yet.")
+    if timestamps is None:
+        return float("nan")
+    ts = np.asarray(timestamps, dtype=float)
+    if ts.ndim == 0 or ts.size < 2:
+        return float("nan")
+    deltas = np.diff(ts)
+    finite_deltas = deltas[np.isfinite(deltas) & (deltas > 0)]
+    if finite_deltas.size == 0:
+        return float("nan")
+    return float(1.0 / np.median(finite_deltas))
 
 
 def build_normalized_recording(

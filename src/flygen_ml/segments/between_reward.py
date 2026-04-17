@@ -67,19 +67,36 @@ def extract_between_reward_segments(
         x = np.asarray(recording.x_by_fly[recording.experimental_fly_idx], dtype=float)[start_frame:stop_frame]
         y = np.asarray(recording.y_by_fly[recording.experimental_fly_idx], dtype=float)[start_frame:stop_frame]
         finite_mask = np.isfinite(x) & np.isfinite(y)
+        n_finite_frames = int(np.count_nonzero(finite_mask))
+        duration_frames = stop_frame - start_frame
+        qc_flags: list[str] = []
+        if n_finite_frames < duration_frames:
+            qc_flags.append("has_missing_frames")
+        if n_finite_frames == 0:
+            qc_flags.append("no_finite_frames")
+        if n_finite_frames < 2:
+            qc_flags.append("insufficient_finite_frames")
         segments.append(
             SegmentRecord(
                 segment_id=f"{sample_key}__tr{recording.training_idx}__seg{len(segments)}",
                 sample_key=sample_key,
                 fly_id=fly_id,
                 genotype=genotype,
+                chamber_type=recording.chamber_type,
+                experimental_fly_idx=recording.experimental_fly_idx,
+                data_path=recording.manifest.data_path,
+                trx_path=recording.manifest.trx_path,
                 training_idx=recording.training_idx,
+                training_start_frame=recording.training_start_frame,
+                training_end_frame=recording.training_end_frame,
                 anchor_reward_frame=int(anchor_frame),
                 start_frame=start_frame,
                 stop_frame=stop_frame,
                 end_reward_frame=next_reward_frame,
-                duration_frames=stop_frame - start_frame,
-                n_finite_frames=int(np.count_nonzero(finite_mask)),
+                duration_frames=duration_frames,
+                n_finite_frames=n_finite_frames,
+                finite_frame_fraction=n_finite_frames / duration_frames,
+                qc_flags=tuple(qc_flags),
                 reward_center_x=reward_events.metadata.get("reward_center_x") if reward_events.metadata else None,
                 reward_center_y=reward_events.metadata.get("reward_center_y") if reward_events.metadata else None,
                 reward_radius=reward_events.metadata.get("reward_radius") if reward_events.metadata else None,

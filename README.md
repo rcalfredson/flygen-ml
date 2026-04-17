@@ -15,6 +15,15 @@ This repo is currently scaffolded for a narrow v1:
 
 The true loader, reward extraction, and between-reward segment semantics still require fixture-backed verification before implementation is considered complete.
 
+## V1 Outputs
+
+The current v1 path produces two CSV artifacts:
+
+- `segments.csv`: one row per canonical between-reward segment, including source provenance, frame boundaries, minimal QC, and reward geometry. This table stays path-aware because it retains the information needed to recover the original trajectory slice from the paired raw files.
+- `fly_features.csv`: one row per experimental fly after aggregating engineered per-segment summaries across that fly's segments. This table is intended for the first fly-level baseline and does not embed raw paths directly.
+
+In other words, v1 keeps raw trajectory recoverability in the segment table, then trains the first baseline from aggregated engineered summaries at the fly level.
+
 ## Key Docs
 
 - [docs/source-data-contract.md](docs/source-data-contract.md)

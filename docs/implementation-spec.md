@@ -150,10 +150,12 @@ The emphasis is a clean, narrow v1 rather than early generalization.
 - build normalized recording objects
 - extract canonical v1 segments
 - write segment table
+- keep enough source provenance in the segment table to recover the original trajectory slice later without introducing a second storage layer in v1
 
 ### `flygen_ml/cli/build_features.py`
 
 - build engineered or sequence-ready features from extracted segments
+- for the first engineered baseline path, reduce each segment to interpretable engineered metrics and then aggregate those metrics to one fly-level row per experimental fly
 
 ### `flygen_ml/cli/train_model.py`
 
@@ -220,13 +222,20 @@ Required fields:
 - `sample_key: str`
 - `fly_id: str`
 - `genotype: str`
+- `chamber_type: str`
+- `experimental_fly_idx: int`
+- `data_path: Path`
+- `trx_path: Path`
 - `training_idx: int`
+- `training_start_frame: int`
+- `training_end_frame: int`
 - `anchor_reward_frame: int`
 - `start_frame: int`
 - `stop_frame: int`
 - `end_reward_frame: int | None`
 - `duration_frames: int`
 - `n_finite_frames: int`
+- `finite_frame_fraction: float`
 - `qc_flags: tuple[str, ...]`
 
 Recommended optional fields:
@@ -235,6 +244,41 @@ Recommended optional fields:
 - `reward_radius: float | None`
 - `terminated_by_training_end: bool`
 - `anchor_reward_kind: str`
+
+Notes:
+- the v1 segment table is intentionally self-sufficient for a CSV-only workflow, so it carries source provenance and frame bounds in addition to semantic segment metadata
+- the first fly-level baseline does not embed segment trajectories directly; it recomputes per-segment engineered features from these recoverable slices and aggregates them to fly-level summaries
+
+### Fly-Level Engineered Row
+
+Represents one experimental fly after aggregating engineered per-segment features.
+
+Required fields:
+- `fly_id: str`
+- `sample_key: str`
+- `genotype: str`
+- `chamber_type: str`
+- `training_idx: int`
+- `n_segments: int`
+- `n_segments_with_qc_flags: int`
+
+Required aggregated engineered fields for the first pass:
+- `duration_frames_mean`
+- `finite_frame_fraction_mean`
+- `path_length_px_mean`
+- `net_displacement_px_mean`
+- `straightness_mean`
+- `mean_step_distance_px_mean`
+- `mean_radius_px_mean`
+- `radius_std_px_mean`
+- `start_radius_px_mean`
+- `end_radius_px_mean`
+- `radius_delta_px_mean`
+
+Notes:
+- this row is the direct input to the first fly-level baseline
+- it is intentionally summary-based and does not contain nested path data
+- if sequence or pooling models are added later, they should consume segment-level recoverable slices or sequence tables rather than overloading this fly-level table
 
 ### Sequence Sample
 
