@@ -208,3 +208,8 @@ __marimo__/
 
 # VS Code
 .codex
+.vscode/
+
+# Generated flygen-ml outputs
+artifacts/
+runs/
