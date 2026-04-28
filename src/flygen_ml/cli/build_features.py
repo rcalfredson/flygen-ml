@@ -17,6 +17,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--feature-set", required=True, help="Feature set name.")
     parser.add_argument("--segments", required=True, help="Input segment table path.")
     parser.add_argument("--output", required=True, help="Output feature table path.")
+    parser.add_argument(
+        "--include-training-end-segments",
+        action="store_true",
+        help="Include segments that ended only because the selected training ended.",
+    )
     return parser
 
 
@@ -56,6 +61,16 @@ def _compute_segment_feature_rows(segments: list[SegmentRecord]) -> list[dict[st
     return rows
 
 
+def _filter_segments_for_feature_building(
+    segments: list[SegmentRecord],
+    *,
+    include_training_end_segments: bool = False,
+) -> list[SegmentRecord]:
+    if include_training_end_segments:
+        return segments
+    return [segment for segment in segments if not segment.terminated_by_training_end]
+
+
 def _write_feature_table(path: str | Path, rows: list[dict[str, object]]) -> None:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,9 +95,16 @@ def main() -> int:
     if args.feature_set != "engineered_v1":
         raise ValueError(f"unsupported feature set: {args.feature_set}")
     segments = load_segment_table(args.segments)
-    aggregated_rows = aggregate_segment_features(_compute_segment_feature_rows(segments))
+    feature_segments = _filter_segments_for_feature_building(
+        segments,
+        include_training_end_segments=args.include_training_end_segments,
+    )
+    n_filtered = len(segments) - len(feature_segments)
+    aggregated_rows = aggregate_segment_features(_compute_segment_feature_rows(feature_segments))
     _write_feature_table(args.output, aggregated_rows)
     print(f"wrote {len(aggregated_rows)} fly-level engineered rows to {args.output}")
+    if n_filtered:
+        print(f"omitted {n_filtered} training-end-terminated segments from feature building")
     return 0
 
 

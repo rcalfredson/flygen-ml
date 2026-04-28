@@ -23,6 +23,7 @@ The current v1 path produces two CSV artifacts:
 - `fly_features.csv`: one row per experimental fly after aggregating engineered per-segment summaries across that fly's segments. This table is intended for the first fly-level baseline and does not embed raw paths directly.
 
 In other words, v1 keeps raw trajectory recoverability in the segment table, then trains the first baseline from aggregated engineered summaries at the fly level.
+Feature building omits training-end-terminated segments by default, because those segments do not end at a reward re-entry.
 
 ## Key Docs
 
