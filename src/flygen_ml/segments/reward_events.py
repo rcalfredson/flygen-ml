@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from flygen_ml.errors import MalformedRecordingError
 from flygen_ml.schema import NormalizedRecording
 
 DEFAULT_BORDER_WIDTH_PX = 1.0
@@ -29,12 +30,12 @@ def _selected_fly_frame_nums(recording: NormalizedRecording) -> dict[str, Any]:
     fly_idx = recording.experimental_fly_idx
     if isinstance(frame_nums, list):
         if fly_idx < 0 or fly_idx >= len(frame_nums):
-            raise IndexError(f"experimental_fly_idx {fly_idx} out of range for frameNums")
+            raise MalformedRecordingError(f"experimental_fly_idx {fly_idx} out of range for frameNums")
         selected = frame_nums[fly_idx]
     else:
         selected = frame_nums
     if not isinstance(selected, dict):
-        raise ValueError("selected frameNums entry is missing or is not a mapping")
+        raise MalformedRecordingError("selected frameNums entry is missing or is not a mapping")
     return selected
 
 
@@ -43,12 +44,12 @@ def _selected_fly_info(recording: NormalizedRecording) -> dict[str, Any]:
     fly_idx = recording.experimental_fly_idx
     if isinstance(info, list):
         if fly_idx < 0 or fly_idx >= len(info):
-            raise IndexError(f"experimental_fly_idx {fly_idx} out of range for info")
+            raise MalformedRecordingError(f"experimental_fly_idx {fly_idx} out of range for info")
         selected = info[fly_idx]
     else:
         selected = info
     if not isinstance(selected, dict):
-        raise ValueError("selected info entry is missing or is not a mapping")
+        raise MalformedRecordingError("selected info entry is missing or is not a mapping")
     return selected
 
 
@@ -58,9 +59,9 @@ def _reward_circle_for_training(recording: NormalizedRecording) -> tuple[float, 
     cpos = fly_info.get("cPos")
     radii = fly_info.get("r")
     if not isinstance(cpos, (list, tuple)) or training_idx >= len(cpos):
-        raise ValueError('selected info entry is missing "cPos" sequence for training')
+        raise MalformedRecordingError('selected info entry is missing "cPos" sequence for training')
     if not isinstance(radii, (list, tuple)) or training_idx >= len(radii):
-        raise ValueError('selected info entry is missing "r" sequence for training')
+        raise MalformedRecordingError('selected info entry is missing "r" sequence for training')
     cx, cy = cpos[training_idx]
     return float(cx), float(cy), float(radii[training_idx])
 

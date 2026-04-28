@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from flygen_ml.errors import MalformedRecordingError
 from flygen_ml.loaders.pickle_loader import load_recording_pair
 from flygen_ml.loaders.protocol_parser import (
     get_chamber_type,
@@ -95,3 +96,10 @@ def test_protocol_parser_training_bounds_for_selected_training():
 
     assert training_start_frame == expected_start
     assert training_end_frame == expected_end
+
+
+def test_protocol_parser_rejects_missing_start_train_sequence():
+    protocol = {"frameNums": [{"v0": [1, 2, 3]}]}
+
+    with pytest.raises(MalformedRecordingError, match='missing "startTrain"'):
+        get_selected_training_bounds(protocol, fly_idx=0, training_idx=0)
