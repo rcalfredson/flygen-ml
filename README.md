@@ -44,6 +44,7 @@ pytest
 
 ```bash
 python -m flygen_ml.cli.build_manifest --help
+python -m flygen_ml.cli.build_manifest_from_globs --help
 python -m flygen_ml.cli.extract_segments --help
 python -m flygen_ml.cli.build_features --help
 python -m flygen_ml.cli.train_model --help
