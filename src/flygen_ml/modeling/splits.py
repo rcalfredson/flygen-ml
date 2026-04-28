@@ -60,3 +60,59 @@ def grouped_split(
     if not train_rows or not valid_rows:
         raise ValueError("split produced an empty train or validation partition")
     return train_rows, valid_rows
+
+
+def grouped_k_fold_splits(
+    rows: list[dict[str, object]],
+    *,
+    group_key: str,
+    label_key: str = "genotype",
+    random_seed: int = 0,
+    n_splits: int = 5,
+) -> list[tuple[list[dict[str, object]], list[dict[str, object]]]]:
+    if not rows:
+        raise ValueError("cannot split empty rows")
+    if n_splits < 2:
+        raise ValueError(f"n_splits must be at least 2, got {n_splits}")
+
+    grouped_rows: dict[str, list[dict[str, object]]] = {}
+    label_by_group: dict[str, str] = {}
+    for row in rows:
+        group_value = str(row[group_key])
+        label_value = str(row[label_key])
+        grouped_rows.setdefault(group_value, []).append(row)
+        existing = label_by_group.get(group_value)
+        if existing is None:
+            label_by_group[group_value] = label_value
+        elif existing != label_value:
+            raise ValueError(f"group {group_value!r} has inconsistent labels: {existing!r} vs {label_value!r}")
+
+    groups_by_label: dict[str, list[str]] = {}
+    for group_value, label_value in label_by_group.items():
+        groups_by_label.setdefault(label_value, []).append(group_value)
+
+    rng = random.Random(random_seed)
+    valid_groups_by_fold: list[set[str]] = [set() for _ in range(n_splits)]
+    for label_value, group_values in sorted(groups_by_label.items()):
+        if len(group_values) < n_splits:
+            raise ValueError(
+                f"label {label_value!r} needs at least {n_splits} groups for {n_splits}-fold CV, "
+                f"got {len(group_values)}"
+            )
+        shuffled = sorted(group_values)
+        rng.shuffle(shuffled)
+        for idx, group_value in enumerate(shuffled):
+            valid_groups_by_fold[idx % n_splits].add(group_value)
+
+    all_groups = set(grouped_rows)
+    folds: list[tuple[list[dict[str, object]], list[dict[str, object]]]] = []
+    for valid_groups in valid_groups_by_fold:
+        train_groups = sorted(all_groups - valid_groups)
+        valid_groups_sorted = sorted(valid_groups)
+        assert_no_group_leakage(train_groups, valid_groups_sorted)
+        train_rows = [row for row in rows if str(row[group_key]) in train_groups]
+        valid_rows = [row for row in rows if str(row[group_key]) in valid_groups]
+        if not train_rows or not valid_rows:
+            raise ValueError("split produced an empty train or validation partition")
+        folds.append((train_rows, valid_rows))
+    return folds

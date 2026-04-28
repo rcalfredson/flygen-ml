@@ -3,6 +3,7 @@ model_kind: baseline
 group_key: fly_id
 random_seed: 7
 valid_fraction: 0.25
+cv_folds: 5
 learning_rate: 0.1
 max_iter: 400
 l2_reg: 0.01

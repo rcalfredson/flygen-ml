@@ -1,0 +1,94 @@
+<h3><strong>High-level summary</strong></h3>
+<ul>
+<li><strong>Scientific question:</strong>&nbsp;do movement patterns in between-reward trajectories contain enough information to distinguish fly genotype, specifically Control&gt;Kir versus PFN&gt;Kir?</li>
+<li><strong>Short answer:</strong>&nbsp;yes, as a first proof of concept. A movement-only fly-level logistic regression classifier reached 75.4% validation accuracy overall, and 87.8% accuracy among high-evidence flies with at least 50 between-reward segments.</li>
+<li><strong>Interpretation:</strong>&nbsp;between-reward trajectory summaries appear to contain genotype-relevant signal. A grouped cross-validation check supports this conclusion, while also showing meaningful fold-to-fold variability.</li>
+</ul>
+<p>&nbsp;</p>
+<hr />
+<h3><strong>Dataset and pipeline</strong></h3>
+<p>This first classifier uses the current fly-level engineered feature table from Training 2 between-reward trajectory segments.</p>
+<ul>
+<li>Code repository:&nbsp;<a href="https://github.com/rcalfredson/flygen-ml">flygen-ml on GitHub</a></li>
+<li>Input feature table:&nbsp;<code>artifacts/features_no_training_end.csv</code></li>
+<li>Reference run:&nbsp;<code>runs/logreg_v1_movement_only</code></li>
+<li>Model config:&nbsp;<code>configs/model/logreg.yaml</code></li>
+<li>Unit of prediction:&nbsp;one experimental fly</li>
+<li>Labels:&nbsp;Control&gt;Kir versus PFN&gt;Kir</li>
+<li>Split:&nbsp;grouped by fly ID, so the same fly cannot appear in both train and validation</li>
+</ul>
+<p>&nbsp;</p>
+<p>The pipeline currently runs end to end:</p>
+<ol>
+<li>glob-based manifest construction</li>
+<li>between-reward segment extraction</li>
+<li>fly-level engineered feature building</li>
+<li>logistic-regression baseline training</li>
+<li>misclassification and segment-level inspection</li>
+</ol> 
+<hr />
+<h3><strong>Analysis choices</strong></h3>
+<p><strong>Why terminal training-end segments were excluded</strong></p>
+<p>Segment extraction keeps all segments, including segments that are terminated only because the selected training window ends. For feature building, these terminal segments are omitted by default because they do not end with reward re-entry. Including them would mix canonical reward-to-next-reward excursions with censored trajectory fragments whose endpoint has a different meaning.</p>
+<p>&nbsp;</p>
+<p><strong>Why segment count was excluded from model inputs</strong></p>
+<p>The movement-only model excludes <code>n_segments</code> and <code>n_segments_with_qc_flags</code> from the regression inputs. This keeps segment count from becoming a direct classifier feature. Instead, segment count is used as an evidence-strength descriptor for interpreting how reliable each fly-level feature summary is likely to be.</p>
+<hr />
+<h3><strong>Main result: movement-only logistic regression</strong></h3>
+<ul>
+<li><strong>Validation n:</strong>&nbsp;57 flies</li>
+<li><strong>Accuracy:</strong>&nbsp;0.7544</li>
+<li><strong>Balanced accuracy:</strong>&nbsp;0.7311</li>
+<li><strong>Control&gt;Kir recall:</strong>&nbsp;0.8788</li>
+<li><strong>PFN&gt;Kir recall:</strong>&nbsp;0.5833</li>
+</ul>
+<p>&nbsp;</p>
+<p>This is a credible first proof of concept that movement-pattern features from between-reward trajectories contain genotype-relevant information. The asymmetry in recall suggests that the current baseline more reliably identifies Control&gt;Kir than PFN&gt;Kir, so the result is promising but not yet balanced across classes.</p>
+<hr />
+<h3><strong>Evidence-bin result</strong></h3>
+<p>Because fly-level features summarize a variable number of between-reward segments, validation performance was also reported by evidence strength.</p>
+<ul>
+<li><strong>High evidence, <code>n_segments &gt;= 50</code>:</strong></li>
+<ul>
+<li>n = 41</li>
+<li>accuracy = 0.8780</li>
+<li>balanced accuracy = 0.8386</li>
+<li>Control&gt;Kir recall = 0.9630</li>
+<li>PFN&gt;Kir recall = 0.7143</li>
+</ul>
+<li><strong>Moderate evidence, <code>20 &lt;= n_segments &lt; 50</code>:</strong>&nbsp;n = 10, accuracy = 0.5000, balanced accuracy = 0.5000</li>
+<li><strong>Low evidence, <code>n_segments &lt; 20</code>:</strong>&nbsp;n = 6, accuracy = 0.3333, balanced accuracy = 0.2000</li>
+</ul>
+<p>&nbsp;</p>
+<p>The strongest result is in high-evidence flies. This makes intuitive sense: with at least 50 reward-to-reward segments, the fly-level movement summaries are based on substantially more behavioral evidence. Low-segment-count flies should be treated cautiously because their feature summaries are sparse and likely noisier.</p>
+<hr />
+<h3><strong>Cross-validation check</strong></h3>
+<p>As a first stability check, the same movement-only logistic regression was evaluated with 5-fold grouped, label-aware cross-validation. Each fold held out flies not seen during training.</p>
+<ul>
+<li><strong>Overall validation accuracy:</strong>&nbsp;mean = 0.7380, SD = 0.0440, range = 0.6667-0.8000</li>
+<li><strong>Overall balanced accuracy:</strong>&nbsp;mean = 0.7237, SD = 0.0553, range = 0.6407-0.8057</li>
+<li><strong>High-evidence accuracy, <code>n_segments &gt;= 50</code>:</strong>&nbsp;mean = 0.8038, SD = 0.0798, range = 0.6757-0.9167</li>
+<li><strong>High-evidence balanced accuracy, <code>n_segments &gt;= 50</code>:</strong>&nbsp;mean = 0.7576, SD = 0.0857, range = 0.6473-0.9062</li>
+</ul>
+<p>&nbsp;</p>
+<p>The cross-validation results support the main proof-of-concept conclusion: movement-only between-reward features contain genotype-relevant signal. However, they also temper the single-split result. High-evidence flies usually perform better than the full validation set, but performance varies across folds, and PFN&gt;Kir recall is the least stable component.</p>
+<hr />
+<h3><strong>Caveats</strong></h3>
+<ul>
+<li><strong>Fold-to-fold variability:</strong>&nbsp;the grouped cross-validation check shows that performance is not unique to one split, but also that the high-evidence result is not uniformly strong across folds.</li>
+<li><strong>Small evidence-bin counts:</strong>&nbsp;moderate- and low-evidence bins have only 10 and 6 validation flies, respectively, so their estimates are especially unstable.</li>
+<li><strong>Fly-level aggregation may hide structure:</strong>&nbsp;averaging segment features per fly is useful for a first baseline, but it discards the distribution and sequence structure of individual segments.</li>
+<li><strong>Class recall is uneven:</strong>&nbsp;PFN&gt;Kir recall is lower and less stable than Control&gt;Kir recall, including in the high-evidence subset.</li>
+</ul>
+<hr />
+<h3><strong>Working conclusion</strong></h3>
+<p>The current result supports the idea that between-reward movement trajectories carry genotype-relevant information. The grouped cross-validation check confirms that the signal is not unique to one train/validation split, but it also shows meaningful fold-to-fold variability. The most defensible near-term statement is: movement-only fly-level features provide a promising first genotype classifier, especially for high-evidence flies, but the model is not yet stable or balanced enough to treat as a final classifier.</p>
+<hr />
+<h3><strong>Next steps</strong></h3>
+<ol>
+<li><strong>Inspect fold-to-fold variability:</strong>&nbsp;identify which flies or recording conditions drive weak folds, especially folds with low PFN&gt;Kir recall.</li>
+<li><strong>Expand to the full four-group problem:</strong>&nbsp;train models that distinguish the four combinations of antenna condition and genotype: intact Control&gt;Kir, intact PFN&gt;Kir, antennae-removed Control&gt;Kir, and antennae-removed PFN&gt;Kir. This would test whether between-reward movement features capture genotype effects, antenna-removal effects, and their possible interaction.</li>
+<li><strong>Move from per-fly to per-segment modeling:</strong>&nbsp;train models that see individual segments, then aggregate evidence to the fly level. This should preserve more behavioral structure than simple fly-level means.</li>
+<li><strong>Try stronger model classes:</strong>&nbsp;compare logistic regression against modern methods such as tree ensembles, regularized linear models with richer features, and sequence or pooling models over segment-level trajectories.</li>
+</ol>
+<p>&nbsp;</p>
