@@ -285,11 +285,13 @@ def train_and_save_cross_validation_run(
     combined_predictions: list[dict[str, object]] = []
     labels: list[str] | None = None
     excluded_feature_names: list[str] = []
+    model_kind = "baseline"
     for fold_idx, (train_rows, valid_rows) in enumerate(folds):
         split_result = _train_and_evaluate_split(train_rows, valid_rows, config=config)
         model = dict(split_result["model"])
         labels = [str(label) for label in model["labels"]]
         excluded_feature_names = [str(name) for name in model.get("excluded_feature_names", [])]
+        model_kind = str(model["model_kind"])
         train_groups = sorted({str(row[group_key]) for row in train_rows})
         valid_groups = sorted({str(row[group_key]) for row in valid_rows})
         fold_summaries.append(
@@ -333,7 +335,7 @@ def train_and_save_cross_validation_run(
         "features_path": str(features_path),
         "group_key": group_key,
         "model_name": config.get("model_name", "baseline"),
-        "model_kind": "logreg_numpy_v1",
+        "model_kind": model_kind,
         "n_folds": resolved_n_splits,
         "rows": len(rows),
         "labels": labels or [],

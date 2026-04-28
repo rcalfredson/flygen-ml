@@ -74,6 +74,15 @@ def _binary_targets(rows: list[dict[str, object]]) -> tuple[np.ndarray, list[str
     return y, labels
 
 
+def _class_targets(rows: list[dict[str, object]]) -> tuple[np.ndarray, list[str]]:
+    labels = sorted({str(row["genotype"]) for row in rows})
+    if len(labels) < 2:
+        raise ValueError(f"baseline expects at least 2 genotypes, got {labels}")
+    label_to_index = {label: idx for idx, label in enumerate(labels)}
+    y = np.asarray([label_to_index[str(row["genotype"])] for row in rows], dtype=int)
+    return y, labels
+
+
 def _fit_logistic_regression(
     x_train: np.ndarray,
     y_train: np.ndarray,
@@ -102,6 +111,39 @@ def _predict_probabilities(x: np.ndarray, weights: np.ndarray, bias: float) -> n
     return 1.0 / (1.0 + np.exp(-logits))
 
 
+def _fit_softmax_regression(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    *,
+    n_classes: int,
+    learning_rate: float,
+    max_iter: int,
+    l2_reg: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    weights = np.zeros((x_train.shape[1], n_classes), dtype=float)
+    bias = np.zeros(n_classes, dtype=float)
+    y_one_hot = np.eye(n_classes, dtype=float)[y_train]
+    n_samples = float(len(y_train))
+    for _ in range(max_iter):
+        logits = x_train @ weights + bias
+        logits = logits - logits.max(axis=1, keepdims=True)
+        exp_logits = np.exp(np.clip(logits, -30.0, 30.0))
+        probs = exp_logits / exp_logits.sum(axis=1, keepdims=True)
+        error = probs - y_one_hot
+        grad_w = (x_train.T @ error) / n_samples + l2_reg * weights
+        grad_b = error.mean(axis=0)
+        weights -= learning_rate * grad_w
+        bias -= learning_rate * grad_b
+    return weights, bias
+
+
+def _predict_class_probabilities(x: np.ndarray, weights: np.ndarray, bias: np.ndarray) -> np.ndarray:
+    logits = x @ weights + bias
+    logits = logits - logits.max(axis=1, keepdims=True)
+    exp_logits = np.exp(np.clip(logits, -30.0, 30.0))
+    return exp_logits / exp_logits.sum(axis=1, keepdims=True)
+
+
 def train_fly_level_baseline(
     rows: list[dict[str, object]],
     *,
@@ -114,7 +156,7 @@ def train_fly_level_baseline(
     }
     feature_names = _resolve_feature_names(rows, exclude_feature_names=exclude_feature_names)
     x_train_raw = _matrix_from_rows(rows, feature_names)
-    y_train, labels = _binary_targets(rows)
+    y_train, labels = _class_targets(rows)
 
     means = _column_means(x_train_raw)
     stds = _column_stds(x_train_raw)
@@ -123,9 +165,32 @@ def train_fly_level_baseline(
     learning_rate = float(config.get("learning_rate", 0.1))
     max_iter = int(config.get("max_iter", 400))
     l2_reg = float(config.get("l2_reg", 0.01))
+    if len(labels) > 2:
+        weights, bias = _fit_softmax_regression(
+            x_train,
+            y_train,
+            n_classes=len(labels),
+            learning_rate=learning_rate,
+            max_iter=max_iter,
+            l2_reg=l2_reg,
+        )
+        train_probs = _predict_class_probabilities(x_train, weights, bias)
+        return {
+            "model_kind": "softmax_logreg_numpy_v1",
+            "feature_names": feature_names,
+            "excluded_feature_names": sorted(exclude_feature_names),
+            "feature_means": means.tolist(),
+            "feature_stds": stds.tolist(),
+            "weights": weights.tolist(),
+            "bias": bias.tolist(),
+            "labels": labels,
+            "train_probabilities": train_probs.tolist(),
+        }
+
+    y_train_binary = y_train.astype(float)
     weights, bias = _fit_logistic_regression(
         x_train,
-        y_train,
+        y_train_binary,
         learning_rate=learning_rate,
         max_iter=max_iter,
         l2_reg=l2_reg,
@@ -154,10 +219,30 @@ def predict_fly_level_baseline(
     means = np.asarray(model["feature_means"], dtype=float)
     stds = np.asarray(model["feature_stds"], dtype=float)
     weights = np.asarray(model["weights"], dtype=float)
-    bias = float(model["bias"])
+    model_kind = str(model.get("model_kind", "logreg_numpy_v1"))
     labels = [str(label) for label in model["labels"]]
 
     x = _impute_and_scale(x_raw, means, stds)
+    if model_kind == "softmax_logreg_numpy_v1":
+        bias = np.asarray(model["bias"], dtype=float)
+        class_probs = _predict_class_probabilities(x, weights, bias)
+        predictions: list[dict[str, object]] = []
+        for row, probs in zip(rows, class_probs):
+            predicted_idx = int(probs.argmax())
+            predictions.append(
+                {
+                    "fly_id": row["fly_id"],
+                    "sample_key": row["sample_key"],
+                    "actual_genotype": row["genotype"],
+                    "predicted_genotype": labels[predicted_idx],
+                    "predicted_probability": float(probs[predicted_idx]),
+                    "n_segments": row.get("n_segments", ""),
+                    "n_segments_with_qc_flags": row.get("n_segments_with_qc_flags", ""),
+                }
+            )
+        return predictions
+
+    bias = float(model["bias"])
     positive_probs = _predict_probabilities(x, weights, bias)
     predictions: list[dict[str, object]] = []
     for row, positive_prob in zip(rows, positive_probs):
