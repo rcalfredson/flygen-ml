@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from flygen_ml.modeling.train import write_run_metadata
+from flygen_ml.modeling.train import train_and_save_run
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -15,15 +15,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    write_run_metadata(
-        args.output,
-        {
-            "status": "scaffold_only",
-            "config": args.config,
-            "features": args.features,
-        },
+    run_metadata = train_and_save_run(
+        config_path=args.config,
+        features_path=args.features,
+        output_dir=args.output,
     )
-    print(f"initialized scaffold run directory at {args.output}")
+    print(
+        "trained "
+        f"{run_metadata['model_kind']} with {run_metadata['train_rows']} train rows and "
+        f"{run_metadata['valid_rows']} validation rows at {args.output}"
+    )
     return 0
 
 

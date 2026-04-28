@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from flygen_ml.modeling.splits import assert_no_group_leakage
+from flygen_ml.modeling.splits import assert_no_group_leakage, grouped_split
 
 
 def test_assert_no_group_leakage_allows_disjoint_groups():
@@ -12,3 +12,19 @@ def test_assert_no_group_leakage_allows_disjoint_groups():
 def test_assert_no_group_leakage_raises_on_overlap():
     with pytest.raises(ValueError):
         assert_no_group_leakage(["a", "b"], ["b", "c"])
+
+
+def test_grouped_split_is_deterministic_and_label_aware():
+    rows = [
+        {"fly_id": "a0", "genotype": "A"},
+        {"fly_id": "a1", "genotype": "A"},
+        {"fly_id": "a2", "genotype": "A"},
+        {"fly_id": "b0", "genotype": "B"},
+        {"fly_id": "b1", "genotype": "B"},
+        {"fly_id": "b2", "genotype": "B"},
+    ]
+
+    train_rows, valid_rows = grouped_split(rows, group_key="fly_id", random_seed=7, valid_fraction=0.34)
+
+    assert {row["fly_id"] for row in train_rows} == {"a0", "a1", "b0", "b1"}
+    assert {row["fly_id"] for row in valid_rows} == {"a2", "b2"}

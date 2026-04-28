@@ -2,5 +2,7 @@ model_name: logreg_v1
 model_kind: baseline
 group_key: fly_id
 random_seed: 7
-
-# TODO: add concrete estimator hyperparameters once modeling dependencies are chosen.
+valid_fraction: 0.25
+learning_rate: 0.1
+max_iter: 400
+l2_reg: 0.01

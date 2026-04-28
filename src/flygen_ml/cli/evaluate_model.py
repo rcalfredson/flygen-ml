@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -11,7 +13,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    print(f"TODO: implement evaluation for run directory {args.run_dir}")
+    run_dir = Path(args.run_dir)
+    metrics_path = run_dir / "metrics_summary.json"
+    if not metrics_path.exists():
+        raise FileNotFoundError(f"missing metrics summary: {metrics_path}")
+    metrics = json.loads(metrics_path.read_text())
+    print(json.dumps(metrics, indent=2, sort_keys=True))
     return 0
 
 
