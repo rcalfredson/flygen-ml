@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from flygen_ml.modeling.baselines import predict_fly_level_baseline, train_fly_level_baseline
-from flygen_ml.modeling.metrics import summarize_metrics
+from flygen_ml.modeling.metrics import evidence_bin_for_n_segments, summarize_metrics, summarize_metrics_by_evidence_bin
 from flygen_ml.modeling.splits import grouped_split
 
 
@@ -78,12 +78,27 @@ def write_prediction_rows(path: str | Path, rows: list[dict[str, object]]) -> No
         "actual_genotype",
         "predicted_genotype",
         "predicted_probability",
+        "n_segments",
+        "n_segments_with_qc_flags",
+        "evidence_bin",
     ]
     with out_path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+def _with_evidence_bins(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    enriched: list[dict[str, object]] = []
+    for row in rows:
+        enriched.append(
+            {
+                **row,
+                "evidence_bin": evidence_bin_for_n_segments(row.get("n_segments")),
+            }
+        )
+    return enriched
 
 
 def train_and_save_run(
@@ -105,18 +120,19 @@ def train_and_save_run(
         valid_fraction=valid_fraction,
     )
     model = train_fly_level_baseline(train_rows, config=config)
-    train_predictions = predict_fly_level_baseline(train_rows, model=model)
-    valid_predictions = predict_fly_level_baseline(valid_rows, model=model)
+    train_predictions = _with_evidence_bins(predict_fly_level_baseline(train_rows, model=model))
+    valid_predictions = _with_evidence_bins(predict_fly_level_baseline(valid_rows, model=model))
+    labels = [str(label) for label in model["labels"]]
 
     train_metrics = summarize_metrics(
         [str(row["actual_genotype"]) for row in train_predictions],
         [str(row["predicted_genotype"]) for row in train_predictions],
-        labels=[str(label) for label in model["labels"]],
+        labels=labels,
     )
     valid_metrics = summarize_metrics(
         [str(row["actual_genotype"]) for row in valid_predictions],
         [str(row["predicted_genotype"]) for row in valid_predictions],
-        labels=[str(label) for label in model["labels"]],
+        labels=labels,
     )
 
     out_dir = Path(output_dir)
@@ -127,6 +143,8 @@ def train_and_save_run(
         {
             "train": train_metrics,
             "valid": valid_metrics,
+            "train_by_evidence_bin": summarize_metrics_by_evidence_bin(train_predictions, labels=labels),
+            "valid_by_evidence_bin": summarize_metrics_by_evidence_bin(valid_predictions, labels=labels),
         },
     )
     combined_predictions = (
@@ -145,6 +163,7 @@ def train_and_save_run(
         "train_rows": len(train_rows),
         "valid_rows": len(valid_rows),
         "labels": model["labels"],
+        "excluded_feature_names": model.get("excluded_feature_names", []),
         "metrics_summary_path": str(out_dir / "metrics_summary.json"),
         "predictions_path": str(out_dir / "predictions.csv"),
         "model_artifact_path": str(out_dir / "model_artifact.json"),

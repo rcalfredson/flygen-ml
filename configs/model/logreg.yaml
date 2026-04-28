@@ -6,3 +6,4 @@ valid_fraction: 0.25
 learning_rate: 0.1
 max_iter: 400
 l2_reg: 0.01
+exclude_feature_names: n_segments,n_segments_with_qc_flags

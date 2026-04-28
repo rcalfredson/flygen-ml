@@ -32,6 +32,7 @@ def test_train_and_save_run_writes_artifacts(tmp_path):
                 "learning_rate: 0.1",
                 "max_iter: 300",
                 "l2_reg: 0.01",
+                "exclude_feature_names: n_segments,n_segments_with_qc_flags",
             ]
         )
     )
@@ -46,6 +47,7 @@ def test_train_and_save_run_writes_artifacts(tmp_path):
     assert metadata["status"] == "completed"
     assert metadata["train_rows"] == 4
     assert metadata["valid_rows"] == 2
+    assert metadata["excluded_feature_names"] == ["n_segments", "n_segments_with_qc_flags"]
     assert (output_dir / "run_metadata.json").exists()
     assert (output_dir / "metrics_summary.json").exists()
     assert (output_dir / "model_artifact.json").exists()
@@ -54,3 +56,11 @@ def test_train_and_save_run_writes_artifacts(tmp_path):
     metrics = json.loads((output_dir / "metrics_summary.json").read_text())
     assert metrics["train"]["n_examples"] == 4
     assert metrics["valid"]["n_examples"] == 2
+    assert "valid_by_evidence_bin" in metrics
+
+    model = json.loads((output_dir / "model_artifact.json").read_text())
+    assert "n_segments" not in model["feature_names"]
+    assert "n_segments_with_qc_flags" not in model["feature_names"]
+
+    predictions = (output_dir / "predictions.csv").read_text()
+    assert "n_segments,n_segments_with_qc_flags,evidence_bin" in predictions

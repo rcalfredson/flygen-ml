@@ -58,6 +58,8 @@ def test_build_prediction_inspection_rows_reports_misclassified_validation_rows(
     assert rows[0]["decision_margin"] == 0.050000000000000044
     assert rows[0]["top_toward_predicted"] == "wide_mean:1"
     assert rows[0]["top_against_predicted"] == "count:-0.25"
+    assert rows[0]["n_segments"] == ""
+    assert rows[0]["evidence_bin"] == "unknown"
     assert rows[1]["fly_id"] == "fly1"
     assert rows[1]["top_toward_predicted"] == "wide_mean:-0.5"
     assert rows[1]["top_against_predicted"] == "count:0.5"

@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 from typing import TextIO
 
+from flygen_ml.modeling.metrics import evidence_bin_for_n_segments
 from flygen_ml.modeling.train import load_feature_rows
 
 
@@ -134,6 +135,9 @@ def build_prediction_inspection_rows(
             "predicted_probability": probability,
             "decision_margin": abs(probability - 0.5),
             "correct": correct,
+            "n_segments": feature_row.get("n_segments", ""),
+            "n_segments_with_qc_flags": feature_row.get("n_segments_with_qc_flags", ""),
+            "evidence_bin": evidence_bin_for_n_segments(feature_row.get("n_segments")),
             "top_toward_predicted": _format_contributors(toward_predicted, top_n=top_n),
             "top_against_predicted": _format_contributors(against_predicted, top_n=top_n),
         }
@@ -154,6 +158,9 @@ def write_prediction_inspection_rows(rows: list[dict[str, object]], handle: Text
         "predicted_probability",
         "decision_margin",
         "correct",
+        "n_segments",
+        "n_segments_with_qc_flags",
+        "evidence_bin",
         "top_toward_predicted",
         "top_against_predicted",
     ]

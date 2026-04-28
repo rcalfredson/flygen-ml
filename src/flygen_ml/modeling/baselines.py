@@ -12,12 +12,17 @@ NON_FEATURE_COLUMNS = {
 }
 
 
-def _resolve_feature_names(rows: list[dict[str, object]]) -> list[str]:
+def _resolve_feature_names(
+    rows: list[dict[str, object]],
+    *,
+    exclude_feature_names: set[str] | None = None,
+) -> list[str]:
     first = rows[0]
+    excluded = exclude_feature_names or set()
     feature_names = [
         key
         for key, value in first.items()
-        if key not in NON_FEATURE_COLUMNS and isinstance(value, (int, float))
+        if key not in NON_FEATURE_COLUMNS and key not in excluded and isinstance(value, (int, float))
     ]
     if not feature_names:
         raise ValueError("no numeric feature columns found")
@@ -102,7 +107,12 @@ def train_fly_level_baseline(
     *,
     config: dict[str, object],
 ) -> dict[str, object]:
-    feature_names = _resolve_feature_names(rows)
+    exclude_feature_names = {
+        str(name).strip()
+        for name in str(config.get("exclude_feature_names", "")).split(",")
+        if str(name).strip()
+    }
+    feature_names = _resolve_feature_names(rows, exclude_feature_names=exclude_feature_names)
     x_train_raw = _matrix_from_rows(rows, feature_names)
     y_train, labels = _binary_targets(rows)
 
@@ -124,6 +134,7 @@ def train_fly_level_baseline(
     return {
         "model_kind": "logreg_numpy_v1",
         "feature_names": feature_names,
+        "excluded_feature_names": sorted(exclude_feature_names),
         "feature_means": means.tolist(),
         "feature_stds": stds.tolist(),
         "weights": weights.tolist(),
@@ -159,6 +170,8 @@ def predict_fly_level_baseline(
                 "actual_genotype": row["genotype"],
                 "predicted_genotype": predicted_label,
                 "predicted_probability": prob,
+                "n_segments": row.get("n_segments", ""),
+                "n_segments_with_qc_flags": row.get("n_segments_with_qc_flags", ""),
             }
         )
     return predictions

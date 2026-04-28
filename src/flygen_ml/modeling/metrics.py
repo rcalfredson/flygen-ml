@@ -1,6 +1,18 @@
 from __future__ import annotations
 
 
+def evidence_bin_for_n_segments(n_segments: object) -> str:
+    try:
+        value = int(float(n_segments))
+    except (TypeError, ValueError):
+        return "unknown"
+    if value < 20:
+        return "low_n_segments_lt20"
+    if value < 50:
+        return "moderate_n_segments_20_to_49"
+    return "high_n_segments_ge50"
+
+
 def summarize_metrics(
     y_true: list[str],
     y_pred: list[str],
@@ -34,3 +46,23 @@ def summarize_metrics(
         "label_support": per_label_support,
         "label_recall": per_label_recalls,
     }
+
+
+def summarize_metrics_by_evidence_bin(
+    prediction_rows: list[dict[str, object]],
+    *,
+    labels: list[str],
+) -> dict[str, dict[str, float | int | dict[str, float | int]]]:
+    rows_by_bin: dict[str, list[dict[str, object]]] = {}
+    for row in prediction_rows:
+        evidence_bin = str(row.get("evidence_bin") or evidence_bin_for_n_segments(row.get("n_segments")))
+        rows_by_bin.setdefault(evidence_bin, []).append(row)
+
+    summaries: dict[str, dict[str, float | int | dict[str, float | int]]] = {}
+    for evidence_bin, rows in sorted(rows_by_bin.items()):
+        summaries[evidence_bin] = summarize_metrics(
+            [str(row["actual_genotype"]) for row in rows],
+            [str(row["predicted_genotype"]) for row in rows],
+            labels=labels,
+        )
+    return summaries
