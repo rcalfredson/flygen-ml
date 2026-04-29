@@ -47,6 +47,7 @@ def test_extract_segments_skips_malformed_recordings(monkeypatch, tmp_path, caps
         sample_key="good__fly0",
         fly_id="good__fly0__fly0",
         genotype="A",
+        cohort="intact",
         chamber_type="large",
         experimental_fly_idx=0,
         data_path=Path("/tmp/good.data"),

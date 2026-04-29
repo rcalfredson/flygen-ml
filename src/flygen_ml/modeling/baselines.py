@@ -7,8 +7,21 @@ NON_FEATURE_COLUMNS = {
     "fly_id",
     "sample_key",
     "genotype",
+    "cohort",
+    "chamber",
     "chamber_type",
     "training_idx",
+    "date",
+    "fly_idx",
+    "label_key",
+    "actual_label",
+    "predicted_label",
+    "actual_genotype",
+    "predicted_genotype",
+    "segment_id",
+    "qc_flags",
+    "data_path",
+    "trx_path",
 }
 
 
@@ -65,21 +78,29 @@ def _impute_and_scale(x: np.ndarray, means: np.ndarray, stds: np.ndarray) -> np.
     return (imputed - means) / stds
 
 
-def _binary_targets(rows: list[dict[str, object]]) -> tuple[np.ndarray, list[str]]:
-    labels = sorted({str(row["genotype"]) for row in rows})
-    if len(labels) != 2:
-        raise ValueError(f"baseline expects exactly 2 genotypes, got {labels}")
-    label_to_index = {label: idx for idx, label in enumerate(labels)}
-    y = np.asarray([label_to_index[str(row["genotype"])] for row in rows], dtype=float)
-    return y, labels
+def _resolve_label_key(config: dict[str, object]) -> str:
+    return str(config.get("label_key", config.get("target_key", "genotype")))
 
 
-def _class_targets(rows: list[dict[str, object]]) -> tuple[np.ndarray, list[str]]:
-    labels = sorted({str(row["genotype"]) for row in rows})
+def _target_label(row: dict[str, object], *, label_key: str) -> str:
+    if label_key not in row:
+        raise ValueError(f"requested label_key {label_key!r} is missing from feature rows")
+    value = row[label_key]
+    if value is None:
+        raise ValueError(f"requested label_key {label_key!r} has empty labels")
+    label = str(value)
+    if label == "":
+        raise ValueError(f"requested label_key {label_key!r} has empty labels")
+    return label
+
+
+def _class_targets(rows: list[dict[str, object]], *, label_key: str) -> tuple[np.ndarray, list[str]]:
+    target_labels = [_target_label(row, label_key=label_key) for row in rows]
+    labels = sorted(set(target_labels))
     if len(labels) < 2:
-        raise ValueError(f"baseline expects at least 2 genotypes, got {labels}")
+        raise ValueError(f"baseline expects at least 2 labels for {label_key!r}, got {labels}")
     label_to_index = {label: idx for idx, label in enumerate(labels)}
-    y = np.asarray([label_to_index[str(row["genotype"])] for row in rows], dtype=int)
+    y = np.asarray([label_to_index[label] for label in target_labels], dtype=int)
     return y, labels
 
 
@@ -149,6 +170,7 @@ def train_fly_level_baseline(
     *,
     config: dict[str, object],
 ) -> dict[str, object]:
+    label_key = _resolve_label_key(config)
     exclude_feature_names = {
         str(name).strip()
         for name in str(config.get("exclude_feature_names", "")).split(",")
@@ -156,7 +178,7 @@ def train_fly_level_baseline(
     }
     feature_names = _resolve_feature_names(rows, exclude_feature_names=exclude_feature_names)
     x_train_raw = _matrix_from_rows(rows, feature_names)
-    y_train, labels = _class_targets(rows)
+    y_train, labels = _class_targets(rows, label_key=label_key)
 
     means = _column_means(x_train_raw)
     stds = _column_stds(x_train_raw)
@@ -177,6 +199,7 @@ def train_fly_level_baseline(
         train_probs = _predict_class_probabilities(x_train, weights, bias)
         return {
             "model_kind": "softmax_logreg_numpy_v1",
+            "label_key": label_key,
             "feature_names": feature_names,
             "excluded_feature_names": sorted(exclude_feature_names),
             "feature_means": means.tolist(),
@@ -198,6 +221,7 @@ def train_fly_level_baseline(
     train_probs = _predict_probabilities(x_train, weights, bias)
     return {
         "model_kind": "logreg_numpy_v1",
+        "label_key": label_key,
         "feature_names": feature_names,
         "excluded_feature_names": sorted(exclude_feature_names),
         "feature_means": means.tolist(),
@@ -215,6 +239,7 @@ def predict_fly_level_baseline(
     model: dict[str, object],
 ) -> list[dict[str, object]]:
     feature_names = [str(name) for name in model["feature_names"]]
+    label_key = str(model.get("label_key", "genotype"))
     x_raw = _matrix_from_rows(rows, feature_names)
     means = np.asarray(model["feature_means"], dtype=float)
     stds = np.asarray(model["feature_stds"], dtype=float)
@@ -229,17 +254,22 @@ def predict_fly_level_baseline(
         predictions: list[dict[str, object]] = []
         for row, probs in zip(rows, class_probs):
             predicted_idx = int(probs.argmax())
-            predictions.append(
-                {
-                    "fly_id": row["fly_id"],
-                    "sample_key": row["sample_key"],
-                    "actual_genotype": row["genotype"],
-                    "predicted_genotype": labels[predicted_idx],
-                    "predicted_probability": float(probs[predicted_idx]),
-                    "n_segments": row.get("n_segments", ""),
-                    "n_segments_with_qc_flags": row.get("n_segments_with_qc_flags", ""),
-                }
-            )
+            actual_label = _target_label(row, label_key=label_key)
+            predicted_label = labels[predicted_idx]
+            prediction: dict[str, object] = {
+                "fly_id": row["fly_id"],
+                "sample_key": row["sample_key"],
+                "label_key": label_key,
+                "actual_label": actual_label,
+                "predicted_label": predicted_label,
+                "predicted_probability": float(probs[predicted_idx]),
+                "n_segments": row.get("n_segments", ""),
+                "n_segments_with_qc_flags": row.get("n_segments_with_qc_flags", ""),
+            }
+            if label_key == "genotype":
+                prediction["actual_genotype"] = actual_label
+                prediction["predicted_genotype"] = predicted_label
+            predictions.append(prediction)
         return predictions
 
     bias = float(model["bias"])
@@ -248,15 +278,19 @@ def predict_fly_level_baseline(
     for row, positive_prob in zip(rows, positive_probs):
         prob = float(positive_prob)
         predicted_label = labels[1] if prob >= 0.5 else labels[0]
-        predictions.append(
-            {
-                "fly_id": row["fly_id"],
-                "sample_key": row["sample_key"],
-                "actual_genotype": row["genotype"],
-                "predicted_genotype": predicted_label,
-                "predicted_probability": prob,
-                "n_segments": row.get("n_segments", ""),
-                "n_segments_with_qc_flags": row.get("n_segments_with_qc_flags", ""),
-            }
-        )
+        actual_label = _target_label(row, label_key=label_key)
+        prediction = {
+            "fly_id": row["fly_id"],
+            "sample_key": row["sample_key"],
+            "label_key": label_key,
+            "actual_label": actual_label,
+            "predicted_label": predicted_label,
+            "predicted_probability": prob,
+            "n_segments": row.get("n_segments", ""),
+            "n_segments_with_qc_flags": row.get("n_segments_with_qc_flags", ""),
+        }
+        if label_key == "genotype":
+            prediction["actual_genotype"] = actual_label
+            prediction["predicted_genotype"] = predicted_label
+        predictions.append(prediction)
     return predictions

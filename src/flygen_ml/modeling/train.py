@@ -68,15 +68,14 @@ def write_json(path: str | Path, payload: dict[str, object]) -> None:
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def write_prediction_rows(path: str | Path, rows: list[dict[str, object]]) -> None:
-    out_path = Path(path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+def _prediction_fieldnames(rows: list[dict[str, object]]) -> list[str]:
     fieldnames = [
         "split",
         "fly_id",
         "sample_key",
-        "actual_genotype",
-        "predicted_genotype",
+        "label_key",
+        "actual_label",
+        "predicted_label",
         "predicted_probability",
         "n_segments",
         "n_segments_with_qc_flags",
@@ -84,8 +83,18 @@ def write_prediction_rows(path: str | Path, rows: list[dict[str, object]]) -> No
     ]
     if any("fold" in row for row in rows):
         fieldnames.insert(0, "fold")
+    if any("actual_genotype" in row for row in rows):
+        insert_at = fieldnames.index("predicted_probability")
+        fieldnames[insert_at:insert_at] = ["actual_genotype", "predicted_genotype"]
+    return fieldnames
+
+
+def write_prediction_rows(path: str | Path, rows: list[dict[str, object]]) -> None:
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = _prediction_fieldnames(rows)
     with out_path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -103,29 +112,35 @@ def _with_evidence_bins(rows: list[dict[str, object]]) -> list[dict[str, object]
     return enriched
 
 
+def _resolved_label_key(config: dict[str, object]) -> str:
+    return str(config.get("label_key", config.get("target_key", "genotype")))
+
+
 def _train_and_evaluate_split(
     train_rows: list[dict[str, object]],
     valid_rows: list[dict[str, object]],
     *,
     config: dict[str, object],
 ) -> dict[str, object]:
+    label_key = _resolved_label_key(config)
     model = train_fly_level_baseline(train_rows, config=config)
     train_predictions = _with_evidence_bins(predict_fly_level_baseline(train_rows, model=model))
     valid_predictions = _with_evidence_bins(predict_fly_level_baseline(valid_rows, model=model))
     labels = [str(label) for label in model["labels"]]
 
     train_metrics = summarize_metrics(
-        [str(row["actual_genotype"]) for row in train_predictions],
-        [str(row["predicted_genotype"]) for row in train_predictions],
+        [str(row["actual_label"]) for row in train_predictions],
+        [str(row["predicted_label"]) for row in train_predictions],
         labels=labels,
     )
     valid_metrics = summarize_metrics(
-        [str(row["actual_genotype"]) for row in valid_predictions],
-        [str(row["predicted_genotype"]) for row in valid_predictions],
+        [str(row["actual_label"]) for row in valid_predictions],
+        [str(row["predicted_label"]) for row in valid_predictions],
         labels=labels,
     )
     return {
         "model": model,
+        "label_key": label_key,
         "labels": labels,
         "train_predictions": train_predictions,
         "valid_predictions": valid_predictions,
@@ -210,12 +225,14 @@ def train_and_save_run(
     config = load_simple_yaml(config_path)
     rows = load_feature_rows(features_path)
     group_key = str(config.get("group_key", "fly_id"))
+    label_key = _resolved_label_key(config)
     valid_fraction = float(config.get("valid_fraction", 0.25))
     random_seed = int(config.get("random_seed", 0))
 
     train_rows, valid_rows = grouped_split(
         rows,
         group_key=group_key,
+        label_key=label_key,
         random_seed=random_seed,
         valid_fraction=valid_fraction,
     )
@@ -230,6 +247,7 @@ def train_and_save_run(
     write_json(
         out_dir / "metrics_summary.json",
         {
+            "label_key": label_key,
             "train": split_result["train_metrics"],
             "valid": split_result["valid_metrics"],
             "train_by_evidence_bin": split_result["train_by_evidence_bin"],
@@ -247,6 +265,7 @@ def train_and_save_run(
         "config_path": str(config_path),
         "features_path": str(features_path),
         "group_key": group_key,
+        "label_key": label_key,
         "model_name": config.get("model_name", "baseline"),
         "model_kind": model["model_kind"],
         "train_rows": len(train_rows),
@@ -271,12 +290,14 @@ def train_and_save_cross_validation_run(
     config = load_simple_yaml(config_path)
     rows = load_feature_rows(features_path)
     group_key = str(config.get("group_key", "fly_id"))
+    label_key = _resolved_label_key(config)
     random_seed = int(config.get("random_seed", 0))
     resolved_n_splits = int(n_splits or config.get("cv_folds", 5))
 
     folds = grouped_k_fold_splits(
         rows,
         group_key=group_key,
+        label_key=label_key,
         random_seed=random_seed,
         n_splits=resolved_n_splits,
     )
@@ -321,6 +342,7 @@ def train_and_save_cross_validation_run(
     write_json(
         out_dir / "cv_metrics_summary.json",
         {
+            "label_key": label_key,
             "n_folds": resolved_n_splits,
             "folds": fold_summaries,
             "summary": _summarize_fold_metrics(fold_summaries),
@@ -334,6 +356,7 @@ def train_and_save_cross_validation_run(
         "config_path": str(config_path),
         "features_path": str(features_path),
         "group_key": group_key,
+        "label_key": label_key,
         "model_name": config.get("model_name", "baseline"),
         "model_kind": model_kind,
         "n_folds": resolved_n_splits,

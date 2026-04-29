@@ -29,9 +29,9 @@ def test_evidence_bin_for_n_segments():
 
 def test_summarize_metrics_by_evidence_bin():
     rows = [
-        {"actual_genotype": "A", "predicted_genotype": "A", "n_segments": 2},
-        {"actual_genotype": "B", "predicted_genotype": "A", "n_segments": 30},
-        {"actual_genotype": "B", "predicted_genotype": "B", "n_segments": 60},
+        {"actual_label": "A", "predicted_label": "A", "n_segments": 2},
+        {"actual_label": "B", "predicted_label": "A", "n_segments": 30},
+        {"actual_label": "B", "predicted_label": "B", "n_segments": 60},
     ]
 
     summary = summarize_metrics_by_evidence_bin(rows, labels=["A", "B"])

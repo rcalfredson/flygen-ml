@@ -63,3 +63,24 @@ def test_grouped_k_fold_splits_requires_each_label_in_each_fold():
 
     with pytest.raises(ValueError, match="needs at least 3 groups"):
         grouped_k_fold_splits(rows, group_key="fly_id", n_splits=3)
+
+
+def test_grouped_split_uses_non_genotype_label_key():
+    rows = [
+        {"fly_id": "a0", "genotype": "G0", "cohort": "intact"},
+        {"fly_id": "a1", "genotype": "G1", "cohort": "intact"},
+        {"fly_id": "a2", "genotype": "G0", "cohort": "intact"},
+        {"fly_id": "b0", "genotype": "G0", "cohort": "removed"},
+        {"fly_id": "b1", "genotype": "G1", "cohort": "removed"},
+        {"fly_id": "b2", "genotype": "G0", "cohort": "removed"},
+    ]
+
+    _, valid_rows = grouped_split(
+        rows,
+        group_key="fly_id",
+        label_key="cohort",
+        random_seed=7,
+        valid_fraction=0.34,
+    )
+
+    assert {row["cohort"] for row in valid_rows} == {"intact", "removed"}

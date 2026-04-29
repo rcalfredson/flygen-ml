@@ -48,6 +48,7 @@ def extract_between_reward_segments(
     sample_key = recording.sample_key
     fly_id = f"{sample_key}__fly{recording.experimental_fly_idx}"
     genotype = recording.manifest.genotype
+    cohort = recording.manifest.cohort
 
     for idx, anchor_frame in enumerate(anchors):
         next_reward_frame = int(anchors[idx + 1]) if idx + 1 < len(anchors) else None
@@ -82,6 +83,7 @@ def extract_between_reward_segments(
                 sample_key=sample_key,
                 fly_id=fly_id,
                 genotype=genotype,
+                cohort=cohort,
                 chamber_type=recording.chamber_type,
                 experimental_fly_idx=recording.experimental_fly_idx,
                 data_path=recording.manifest.data_path,

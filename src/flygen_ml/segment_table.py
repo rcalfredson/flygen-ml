@@ -11,6 +11,7 @@ SEGMENT_TABLE_COLUMNS = (
     "sample_key",
     "fly_id",
     "genotype",
+    "cohort",
     "chamber_type",
     "experimental_fly_idx",
     "data_path",
@@ -32,6 +33,7 @@ SEGMENT_TABLE_COLUMNS = (
     "terminated_by_training_end",
     "anchor_reward_kind",
 )
+OPTIONAL_SEGMENT_TABLE_COLUMNS = {"cohort"}
 
 
 def _format_optional_int(value: int | None) -> str:
@@ -55,6 +57,7 @@ def write_segment_table(path: str | Path, rows: list[SegmentRecord]) -> None:
                     "sample_key": row.sample_key,
                     "fly_id": row.fly_id,
                     "genotype": row.genotype,
+                    "cohort": row.cohort or "",
                     "chamber_type": row.chamber_type,
                     "experimental_fly_idx": row.experimental_fly_idx,
                     "data_path": str(row.data_path),
@@ -73,7 +76,9 @@ def write_segment_table(path: str | Path, rows: list[SegmentRecord]) -> None:
                     "reward_center_x": _format_optional_float(row.reward_center_x),
                     "reward_center_y": _format_optional_float(row.reward_center_y),
                     "reward_radius": _format_optional_float(row.reward_radius),
-                    "terminated_by_training_end": str(row.terminated_by_training_end).lower(),
+                    "terminated_by_training_end": str(
+                        row.terminated_by_training_end
+                    ).lower(),
                     "anchor_reward_kind": row.anchor_reward_kind,
                 }
             )
@@ -91,7 +96,12 @@ def load_segment_table(path: str | Path) -> list[SegmentRecord]:
     rows: list[SegmentRecord] = []
     with Path(path).open("r", newline="") as handle:
         reader = csv.DictReader(handle)
-        missing = [name for name in SEGMENT_TABLE_COLUMNS if name not in (reader.fieldnames or [])]
+        missing = [
+            name
+            for name in SEGMENT_TABLE_COLUMNS
+            if name not in (reader.fieldnames or [])
+            and name not in OPTIONAL_SEGMENT_TABLE_COLUMNS
+        ]
         if missing:
             raise ValueError(f"segment table missing required columns: {missing}")
         for row in reader:
@@ -102,6 +112,7 @@ def load_segment_table(path: str | Path) -> list[SegmentRecord]:
                     sample_key=row["sample_key"],
                     fly_id=row["fly_id"],
                     genotype=row["genotype"],
+                    cohort=row.get("cohort") or None,
                     chamber_type=row["chamber_type"],
                     experimental_fly_idx=int(row["experimental_fly_idx"]),
                     data_path=Path(row["data_path"]),
@@ -120,7 +131,10 @@ def load_segment_table(path: str | Path) -> list[SegmentRecord]:
                     reward_center_x=_parse_optional_float(row["reward_center_x"]),
                     reward_center_y=_parse_optional_float(row["reward_center_y"]),
                     reward_radius=_parse_optional_float(row["reward_radius"]),
-                    terminated_by_training_end=row["terminated_by_training_end"].strip().lower() == "true",
+                    terminated_by_training_end=row["terminated_by_training_end"]
+                    .strip()
+                    .lower()
+                    == "true",
                     anchor_reward_kind=row["anchor_reward_kind"],
                 )
             )

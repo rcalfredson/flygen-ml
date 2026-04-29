@@ -71,6 +71,18 @@ def _feature_contributions(
     return contributions
 
 
+def _actual_label(prediction: dict[str, object]) -> str:
+    if "actual_label" in prediction:
+        return str(prediction["actual_label"])
+    return str(prediction["actual_genotype"])
+
+
+def _predicted_label(prediction: dict[str, object]) -> str:
+    if "predicted_label" in prediction:
+        return str(prediction["predicted_label"])
+    return str(prediction["predicted_genotype"])
+
+
 def build_prediction_inspection_rows(
     *,
     predictions: list[dict[str, object]],
@@ -89,7 +101,9 @@ def build_prediction_inspection_rows(
     for prediction in predictions:
         if str(prediction["split"]) != split:
             continue
-        correct = prediction["actual_genotype"] == prediction["predicted_genotype"]
+        actual_label = _actual_label(prediction)
+        predicted_label = _predicted_label(prediction)
+        correct = actual_label == predicted_label
         if correct and not include_correct:
             continue
 
@@ -99,7 +113,6 @@ def build_prediction_inspection_rows(
             raise ValueError(f"missing feature row for prediction: fly_id={key[0]!r}, sample_key={key[1]!r}")
 
         contributions = _feature_contributions(feature_row, model=model)
-        predicted_label = str(prediction["predicted_genotype"])
         if predicted_label == labels[1]:
             toward_predicted = sorted(
                 [(name, value) for name, value in contributions if value > 0.0],
@@ -130,8 +143,9 @@ def build_prediction_inspection_rows(
             "split": prediction["split"],
             "fly_id": prediction["fly_id"],
             "sample_key": prediction["sample_key"],
-            "actual_genotype": prediction["actual_genotype"],
-            "predicted_genotype": prediction["predicted_genotype"],
+            "label_key": prediction.get("label_key", model.get("label_key", "genotype")),
+            "actual_label": actual_label,
+            "predicted_label": predicted_label,
             "predicted_probability": probability,
             "decision_margin": abs(probability - 0.5),
             "correct": correct,
@@ -141,6 +155,9 @@ def build_prediction_inspection_rows(
             "top_toward_predicted": _format_contributors(toward_predicted, top_n=top_n),
             "top_against_predicted": _format_contributors(against_predicted, top_n=top_n),
         }
+        if str(report_row["label_key"]) == "genotype":
+            report_row["actual_genotype"] = actual_label
+            report_row["predicted_genotype"] = predicted_label
         for feature_name in model["feature_names"]:
             report_row[str(feature_name)] = feature_row.get(str(feature_name), "")
         report_rows.append(report_row)
@@ -153,6 +170,9 @@ def write_prediction_inspection_rows(rows: list[dict[str, object]], handle: Text
         "split",
         "fly_id",
         "sample_key",
+        "label_key",
+        "actual_label",
+        "predicted_label",
         "actual_genotype",
         "predicted_genotype",
         "predicted_probability",

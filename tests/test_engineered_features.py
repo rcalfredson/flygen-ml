@@ -41,6 +41,7 @@ def test_compute_engineered_features_from_segment_geometry():
         sample_key="sample",
         fly_id="sample__fly0",
         genotype="control",
+        cohort="intact",
         chamber_type="ct1",
         experimental_fly_idx=0,
         data_path=Path("/tmp/sample.data"),

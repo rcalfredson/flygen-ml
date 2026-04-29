@@ -48,6 +48,18 @@ def summarize_metrics(
     }
 
 
+def _actual_label(row: dict[str, object]) -> str:
+    if "actual_label" in row:
+        return str(row["actual_label"])
+    return str(row["actual_genotype"])
+
+
+def _predicted_label(row: dict[str, object]) -> str:
+    if "predicted_label" in row:
+        return str(row["predicted_label"])
+    return str(row["predicted_genotype"])
+
+
 def summarize_metrics_by_evidence_bin(
     prediction_rows: list[dict[str, object]],
     *,
@@ -61,8 +73,8 @@ def summarize_metrics_by_evidence_bin(
     summaries: dict[str, dict[str, float | int | dict[str, float | int]]] = {}
     for evidence_bin, rows in sorted(rows_by_bin.items()):
         summaries[evidence_bin] = summarize_metrics(
-            [str(row["actual_genotype"]) for row in rows],
-            [str(row["predicted_genotype"]) for row in rows],
+            [_actual_label(row) for row in rows],
+            [_predicted_label(row) for row in rows],
             labels=labels,
         )
     return summaries

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flygen_ml.cli.build_features import _filter_segments_for_feature_building
+from flygen_ml.cli.build_features import _filter_segments_for_feature_building, _write_feature_table
 from flygen_ml.schema import SegmentRecord
 
 
@@ -12,6 +12,7 @@ def _segment(segment_id: str, *, terminated_by_training_end: bool) -> SegmentRec
         sample_key="sample0",
         fly_id="sample0__fly0",
         genotype="A",
+        cohort="intact",
         chamber_type="large",
         experimental_fly_idx=0,
         data_path=Path("/tmp/sample.data"),
@@ -49,3 +50,26 @@ def test_filter_segments_for_feature_building_can_include_training_end_segments(
     )
 
     assert observed == [reward_terminated, training_end_terminated]
+
+
+def test_write_feature_table_includes_cohort_column(tmp_path):
+    output_path = tmp_path / "features.csv"
+
+    _write_feature_table(
+        output_path,
+        [
+            {
+                "fly_id": "sample0__fly0",
+                "sample_key": "sample0",
+                "genotype": "A",
+                "cohort": "intact",
+                "chamber_type": "large",
+                "training_idx": 1,
+                "n_segments": 1,
+                "n_segments_with_qc_flags": 0,
+            }
+        ],
+    )
+
+    header = output_path.read_text().splitlines()[0].split(",")
+    assert "cohort" in header

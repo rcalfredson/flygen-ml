@@ -12,6 +12,7 @@ def test_aggregate_segment_features_to_fly_level():
             "sample_key": "sample",
             "fly_id": "sample__fly0",
             "genotype": "control",
+            "cohort": "intact",
             "chamber_type": "ct1",
             "training_idx": 0,
             "qc_flags": "",
@@ -32,6 +33,7 @@ def test_aggregate_segment_features_to_fly_level():
             "sample_key": "sample",
             "fly_id": "sample__fly0",
             "genotype": "control",
+            "cohort": "intact",
             "chamber_type": "ct1",
             "training_idx": 0,
             "qc_flags": "has_missing_frames",
@@ -54,6 +56,7 @@ def test_aggregate_segment_features_to_fly_level():
     assert len(aggregated) == 1
     row = aggregated[0]
     assert row["fly_id"] == "sample__fly0"
+    assert row["cohort"] == "intact"
     assert row["n_segments"] == 2
     assert row["n_segments_with_qc_flags"] == 1
     assert row["duration_frames_mean"] == pytest.approx(12.0)

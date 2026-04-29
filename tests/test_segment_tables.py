@@ -14,6 +14,7 @@ def test_segment_table_roundtrip(tmp_path):
             sample_key="sample",
             fly_id="sample__fly1",
             genotype="control",
+            cohort="intact",
             chamber_type="ct1",
             experimental_fly_idx=1,
             data_path=Path("/tmp/sample.data"),
@@ -40,3 +41,19 @@ def test_segment_table_roundtrip(tmp_path):
     observed = load_segment_table(path)
 
     assert observed == rows
+
+
+def test_segment_table_loads_legacy_table_without_cohort(tmp_path):
+    path = tmp_path / "legacy_segments.csv"
+    path.write_text(
+        "\n".join(
+            [
+                "segment_id,sample_key,fly_id,genotype,chamber_type,experimental_fly_idx,data_path,trx_path,training_idx,training_start_frame,training_end_frame,anchor_reward_frame,start_frame,stop_frame,end_reward_frame,duration_frames,n_finite_frames,finite_frame_fraction,qc_flags,reward_center_x,reward_center_y,reward_radius,terminated_by_training_end,anchor_reward_kind",
+                "sample__tr0__seg0,sample,sample__fly1,control,ct1,1,/tmp/sample.data,/tmp/sample.trx,0,100,200,110,120,150,150,30,28,0.9333333333333333,has_missing_frames,1.5,2.5,3.5,false,calculated",
+            ]
+        )
+    )
+
+    observed = load_segment_table(path)
+
+    assert observed[0].cohort is None

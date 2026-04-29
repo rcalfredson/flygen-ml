@@ -50,6 +50,7 @@ class SegmentRecord:
     sample_key: str
     fly_id: str
     genotype: str
+    cohort: str | None
     chamber_type: str
     experimental_fly_idx: int
     data_path: Path

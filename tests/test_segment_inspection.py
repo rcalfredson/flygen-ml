@@ -13,6 +13,7 @@ def _segment(segment_id: str, start_frame: int, stop_frame: int) -> SegmentRecor
         sample_key="sample0",
         fly_id="sample0__fly0",
         genotype="A",
+        cohort="intact",
         chamber_type="large",
         experimental_fly_idx=0,
         data_path=Path("/tmp/sample.data"),
