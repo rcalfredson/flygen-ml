@@ -277,6 +277,20 @@ python -m flygen_ml.cli.inspect_predictions \
 
 Add `--include-features` to include all feature columns from the feature table.
 
+Export all between-reward segment rows for selected prediction-review flies:
+
+```bash
+python -m flygen_ml.cli.export_prediction_segments \
+  --prediction-review runs/logreg_v1_movement_only_antennae_condition_cv/valid_error_review.csv \
+  --segments artifacts/segments_with_cohort.csv \
+  --output runs/logreg_v1_movement_only_antennae_condition_cv/high_confidence_error_segments.csv \
+  --errors-only \
+  --min-decision-margin 0.30
+```
+
+This creates a plotting-ready segment table with prediction metadata prepended to
+each segment row.
+
 ## Modeling Notes
 
 The baseline model automatically ignores known metadata columns, including
@@ -313,6 +327,7 @@ python -m flygen_ml.cli.evaluate_model --help
 python -m flygen_ml.cli.inspect_segments --help
 python -m flygen_ml.cli.inspect_misclassifications --help
 python -m flygen_ml.cli.inspect_predictions --help
+python -m flygen_ml.cli.export_prediction_segments --help
 ```
 
 ## Reference Docs
