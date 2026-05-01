@@ -181,7 +181,17 @@ python -m flygen_ml.cli.evaluate_model \
   --run-dir runs/logreg_v1_movement_only_antennae_condition
 ```
 
-This prints the saved metrics JSON.
+This prints a compact text summary. Use `--json` to print the raw saved metrics
+payload. The command auto-detects holdout runs and grouped CV runs.
+
+To include a confusion matrix and misclassified validation rows:
+
+```bash
+python -m flygen_ml.cli.evaluate_model \
+  --run-dir runs/logreg_v1_movement_only_antennae_condition \
+  --confusion \
+  --misclassifications
+```
 
 ### 7. Run Grouped Cross-Validation
 
@@ -196,6 +206,15 @@ python -m flygen_ml.cli.train_model \
 
 The splitter groups by `group_key` from the model config, currently `fly_id`, and
 stratifies using the active `label_key`.
+
+The same evaluation command works for CV runs:
+
+```bash
+python -m flygen_ml.cli.evaluate_model \
+  --run-dir runs/logreg_v1_movement_only_antennae_condition_cv \
+  --confusion \
+  --misclassifications
+```
 
 ## Output Artifacts
 
