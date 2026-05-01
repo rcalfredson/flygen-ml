@@ -266,6 +266,17 @@ python -m flygen_ml.cli.inspect_misclassifications \
 
 Use `--include-correct` to inspect all rows in the selected split.
 
+Export a compact prediction review table joined to fly-level metadata:
+
+```bash
+python -m flygen_ml.cli.inspect_predictions \
+  --run-dir runs/logreg_v1_movement_only_antennae_condition_cv \
+  --output runs/logreg_v1_movement_only_antennae_condition_cv/valid_error_review.csv \
+  --errors-only
+```
+
+Add `--include-features` to include all feature columns from the feature table.
+
 ## Modeling Notes
 
 The baseline model automatically ignores known metadata columns, including
@@ -301,6 +312,7 @@ python -m flygen_ml.cli.train_model --help
 python -m flygen_ml.cli.evaluate_model --help
 python -m flygen_ml.cli.inspect_segments --help
 python -m flygen_ml.cli.inspect_misclassifications --help
+python -m flygen_ml.cli.inspect_predictions --help
 ```
 
 ## Reference Docs
