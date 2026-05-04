@@ -250,6 +250,13 @@ python -m flygen_ml.cli.train_sequence_model \
 Sequence predictions are one row per fly, not one row per segment, and include
 both genotype and cohort predictions plus joint correctness.
 
+To print a compact summary of a sequence run:
+
+```bash
+python -m flygen_ml.cli.evaluate_sequence_model \
+  --run-dir runs/segment_meanpool_v1_cv
+```
+
 ## Output Artifacts
 
 A standard holdout run writes:
