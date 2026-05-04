@@ -244,6 +244,28 @@ Cross-validation writes:
 - `cv_predictions.csv`
 - `run_metadata.json`
 
+Evaluate whether two independently trained fly-level classifiers jointly
+identify each fly:
+
+```bash
+python -m flygen_ml.cli.evaluate_joint_predictions \
+  --axis-a-run runs/logreg_v1_movement_only_genotype_cv \
+  --axis-b-run runs/logreg_v1_movement_only_antennae_condition_cv \
+  --axis-a-name genotype \
+  --axis-b-name cohort \
+  --split valid \
+  --join-without-fold \
+  --output runs/joint_genotype_cohort_eval/joint_predictions.csv
+```
+
+The joint evaluator auto-detects `cv_predictions.csv` or `predictions.csv`
+inside run directories, or accepts explicit prediction CSVs with
+`--axis-a-predictions` and `--axis-b-predictions`. Rows are joined by
+`fly_id`, `sample_key`, `split` when present on both axes, and `fold` when
+present on both axes. Use `--join-without-fold` for out-of-fold validation
+predictions from CV runs whose fold assignments are not aligned across label
+axes.
+
 ## Inspection Helpers
 
 Rank extracted segments by an engineered metric:
