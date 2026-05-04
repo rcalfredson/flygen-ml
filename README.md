@@ -216,6 +216,40 @@ python -m flygen_ml.cli.evaluate_model \
   --misclassifications
 ```
 
+### 8. Export Trajectory Tensors
+
+The sequence-model path uses the segment table as an index back into the raw
+`.trx` trajectories. It exports fixed-length, reward-normalized per-segment
+tensors while preserving fly labels for fly-level aggregation.
+
+```bash
+python -m flygen_ml.cli.export_sequence_tensors \
+  --segments artifacts/segments_with_cohort.csv \
+  --output artifacts/sequences_v1.npz \
+  --target-length 128
+```
+
+The default channels are `x_rel`, `y_rel`, `dx_rel`, `dy_rel`, `speed_rel`, and
+`r_rel`, where positions are centered on the reward location and scaled by the
+reward radius.
+
+### 9. Train A Fly-Level Sequence Model
+
+The first sequence model is a small NumPy baseline: flatten each segment tensor,
+encode it with a one-hidden-layer MLP, mean-pool segment embeddings per fly, and
+predict both `genotype` and `cohort` with separate softmax heads.
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_meanpool.yaml \
+  --sequences artifacts/sequences_v1.npz \
+  --output runs/segment_meanpool_v1_cv \
+  --cv-folds 5
+```
+
+Sequence predictions are one row per fly, not one row per segment, and include
+both genotype and cohort predictions plus joint correctness.
+
 ## Output Artifacts
 
 A standard holdout run writes:
