@@ -128,15 +128,46 @@ def _train_and_evaluate(
     *,
     config: dict[str, object],
 ) -> dict[str, object]:
-    model = train_sequence_meanpool(x, train_examples, config=config)
-    train_predictions = predict_sequence_meanpool(x, train_examples, model=model)
-    valid_predictions = predict_sequence_meanpool(x, valid_examples, model=model)
+    model_kind = str(config.get("model_kind", "sequence_meanpool_mlp_numpy_v1"))
+    if model_kind == "sequence_conv1d_meanpool_torch_v1":
+        from flygen_ml.modeling.torch_sequence_models import (
+            predict_torch_sequence_meanpool,
+            train_torch_sequence_meanpool,
+        )
+
+        model = train_torch_sequence_meanpool(x, train_examples, config=config)
+        train_predictions = predict_torch_sequence_meanpool(x, train_examples, model=model)
+        valid_predictions = predict_torch_sequence_meanpool(x, valid_examples, model=model)
+    elif model_kind in {"sequence_meanpool_mlp_numpy_v1", "sequence_meanpool"}:
+        model = train_sequence_meanpool(x, train_examples, config=config)
+        train_predictions = predict_sequence_meanpool(x, train_examples, model=model)
+        valid_predictions = predict_sequence_meanpool(x, valid_examples, model=model)
+    else:
+        raise ValueError(f"unsupported sequence model_kind: {model_kind}")
     return {
         "model": model,
         "train_predictions": train_predictions,
         "valid_predictions": valid_predictions,
         "train_metrics": _sequence_metrics(train_predictions),
         "valid_metrics": _sequence_metrics(valid_predictions),
+    }
+
+
+def _model_training_summary(model: dict[str, object]) -> dict[str, object]:
+    return {
+        "model_kind": model.get("model_kind"),
+        "hidden_dim": model.get("hidden_dim"),
+        "conv_channels": model.get("conv_channels"),
+        "embedding_dim": model.get("embedding_dim"),
+        "dropout": model.get("dropout"),
+        "learning_rate": model.get("learning_rate"),
+        "weight_decay": model.get("weight_decay"),
+        "max_iter": model.get("max_iter"),
+        "device": model.get("device"),
+        "train_max_segments_per_fly": model.get("train_max_segments_per_fly"),
+        "eval_max_segments_per_fly": model.get("eval_max_segments_per_fly"),
+        "scaler_max_segments_per_fly": model.get("scaler_max_segments_per_fly"),
+        "segment_sampling": model.get("segment_sampling"),
     }
 
 
@@ -169,12 +200,21 @@ def train_and_save_sequence_run(
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(out_dir / "model_artifact.json", serializable_sequence_model(dict(split_result["model"])))
+    model = dict(split_result["model"])
+    if model.get("model_kind") == "sequence_conv1d_meanpool_torch_v1":
+        from flygen_ml.modeling.torch_sequence_models import serializable_torch_sequence_model
+
+        model_artifact = serializable_torch_sequence_model(model)
+    else:
+        model_artifact = serializable_sequence_model(model)
+    model_kind = str(model["model_kind"])
+    _write_json(out_dir / "model_artifact.json", model_artifact)
     _write_json(
         out_dir / "metrics_summary.json",
         {
-            "model_kind": "sequence_meanpool_mlp_numpy_v1",
+            "model_kind": model_kind,
             "sequence_metadata": sequence_metadata,
+            "training": _model_training_summary(model),
             "train": split_result["train_metrics"],
             "valid": split_result["valid_metrics"],
         },
@@ -184,11 +224,12 @@ def train_and_save_sequence_run(
     _write_prediction_rows(out_dir / "predictions.csv", predictions)
     payload = {
         "status": "completed",
-        "model_kind": "sequence_meanpool_mlp_numpy_v1",
+        "model_kind": model_kind,
         "evaluation_kind": "grouped_holdout",
         "config_path": str(config_path),
         "sequence_path": str(sequence_path),
         "split_label_key": split_label_key,
+        **_model_training_summary(model),
         "train_flies": len(train_rows),
         "valid_flies": len(valid_rows),
         "metrics_summary_path": str(out_dir / "metrics_summary.json"),
@@ -222,6 +263,8 @@ def train_and_save_sequence_cross_validation_run(
     examples_by_fly = _examples_by_fly(examples)
     fold_summaries: list[dict[str, object]] = []
     combined_predictions: list[dict[str, object]] = []
+    training_summary: dict[str, object] | None = None
+    model_kind = "sequence_meanpool_mlp_numpy_v1"
     for fold_idx, (train_rows, valid_rows) in enumerate(folds):
         split_result = _train_and_evaluate(
             x,
@@ -229,6 +272,8 @@ def train_and_save_sequence_cross_validation_run(
             _rows_to_examples(valid_rows, examples_by_fly),
             config={**config, "random_seed": random_seed + fold_idx},
         )
+        model_kind = str(dict(split_result["model"])["model_kind"])
+        training_summary = _model_training_summary(dict(split_result["model"]))
         fold_summaries.append(
             {
                 "fold": fold_idx,
@@ -252,8 +297,9 @@ def train_and_save_sequence_cross_validation_run(
     _write_json(
         out_dir / "cv_metrics_summary.json",
         {
-            "model_kind": "sequence_meanpool_mlp_numpy_v1",
+            "model_kind": model_kind,
             "sequence_metadata": sequence_metadata,
+            "training": training_summary or {},
             "n_folds": resolved_n_splits,
             "folds": fold_summaries,
         },
@@ -261,11 +307,12 @@ def train_and_save_sequence_cross_validation_run(
     _write_prediction_rows(out_dir / "cv_predictions.csv", combined_predictions)
     payload = {
         "status": "completed",
-        "model_kind": "sequence_meanpool_mlp_numpy_v1",
+        "model_kind": model_kind,
         "evaluation_kind": "grouped_k_fold_cv",
         "config_path": str(config_path),
         "sequence_path": str(sequence_path),
         "split_label_key": split_label_key,
+        **(training_summary or {}),
         "n_folds": resolved_n_splits,
         "flies": len(examples),
         "metrics_summary_path": str(out_dir / "cv_metrics_summary.json"),

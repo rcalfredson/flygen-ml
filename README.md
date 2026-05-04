@@ -238,6 +238,9 @@ reward radius.
 The first sequence model is a small NumPy baseline: flatten each segment tensor,
 encode it with a one-hidden-layer MLP, mean-pool segment embeddings per fly, and
 predict both `genotype` and `cohort` with separate softmax heads.
+During training, it randomly samples up to `train_max_segments_per_fly` segments
+per fly each epoch. During evaluation, `eval_max_segments_per_fly: 0` means use
+all available segments for each fly.
 
 ```bash
 python -m flygen_ml.cli.train_sequence_model \
@@ -255,6 +258,17 @@ To print a compact summary of a sequence run:
 ```bash
 python -m flygen_ml.cli.evaluate_sequence_model \
   --run-dir runs/segment_meanpool_v1_cv
+```
+
+For a stronger segment encoder, install PyTorch in the active environment and
+train the Conv1D sequence model:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_conv1d_meanpool.yaml \
+  --sequences artifacts/sequences_v1.npz \
+  --output runs/segment_conv1d_meanpool_v1_cv \
+  --cv-folds 5
 ```
 
 ## Output Artifacts

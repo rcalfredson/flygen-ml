@@ -4,8 +4,11 @@ import csv
 import json
 
 import numpy as np
+import pytest
 
 from flygen_ml.modeling.sequence_training import train_and_save_sequence_cross_validation_run
+
+torch = pytest.importorskip("torch")
 
 
 def _write_sequence_fixture(path):
@@ -26,17 +29,18 @@ def _write_sequence_fixture(path):
     ]
     for fly_id, genotype, cohort, value in specs:
         for segment_idx in range(2):
-            x_rows.append(np.full((4, 2), value + segment_idx * 0.01, dtype=np.float32))
+            base = np.linspace(value, value + 0.1, num=8, dtype=np.float32)
+            x_rows.append(np.stack([base, base + segment_idx * 0.01], axis=1))
             fly_ids.append(fly_id)
             sample_keys.append(f"s_{fly_id}")
             segment_ids.append(f"{fly_id}_seg{segment_idx}")
             genotypes.append(genotype)
             cohorts.append(cohort)
-            qc_flags.append("" if segment_idx == 0 else "has_missing_frames")
+            qc_flags.append("")
     np.savez_compressed(
         path,
         x=np.stack(x_rows),
-        mask=np.ones((len(x_rows), 4), dtype=bool),
+        mask=np.ones((len(x_rows), 8), dtype=bool),
         segment_id=np.asarray(segment_ids),
         sample_key=np.asarray(sample_keys),
         fly_id=np.asarray(fly_ids),
@@ -44,27 +48,30 @@ def _write_sequence_fixture(path):
         cohort=np.asarray(cohorts),
         qc_flags=np.asarray(qc_flags),
         channels=np.asarray(["x_rel", "y_rel"]),
-        target_length=np.asarray(4),
+        target_length=np.asarray(8),
     )
 
 
-def test_train_and_save_sequence_cross_validation_run_writes_fly_level_outputs(tmp_path):
+def test_torch_sequence_cross_validation_run_writes_fly_level_outputs(tmp_path):
     sequence_path = tmp_path / "sequences.npz"
     _write_sequence_fixture(sequence_path)
-    config_path = tmp_path / "segment_meanpool.yaml"
+    config_path = tmp_path / "segment_conv1d.yaml"
     config_path.write_text(
         "\n".join(
             [
-                "model_name: segment_meanpool_v1",
-                "model_kind: sequence_meanpool_mlp_numpy_v1",
+                "model_name: segment_conv1d_meanpool_v1",
+                "model_kind: sequence_conv1d_meanpool_torch_v1",
                 "split_label_key: genotype",
                 "random_seed: 3",
-                "hidden_dim: 4",
+                "conv_channels: 2",
+                "embedding_dim: 4",
+                "dropout: 0.0",
                 "train_max_segments_per_fly: 1",
                 "eval_max_segments_per_fly: 0",
-                "learning_rate: 0.05",
-                "max_iter: 5",
-                "l2_reg: 0.0",
+                "learning_rate: 0.001",
+                "max_iter: 1",
+                "weight_decay: 0.0",
+                "device: cpu",
             ]
         )
     )
@@ -78,18 +85,14 @@ def test_train_and_save_sequence_cross_validation_run_writes_fly_level_outputs(t
     )
 
     assert metadata["status"] == "completed"
-    assert metadata["model_kind"] == "sequence_meanpool_mlp_numpy_v1"
+    assert metadata["model_kind"] == "sequence_conv1d_meanpool_torch_v1"
     metrics = json.loads((output_dir / "cv_metrics_summary.json").read_text())
-    assert metrics["n_folds"] == 3
-    assert metrics["sequence_metadata"]["n_flies"] == 6
-    assert metrics["training"]["train_max_segments_per_fly"] == 1
-    assert metrics["training"]["eval_max_segments_per_fly"] == 0
-    assert metrics["training"]["segment_sampling"] == "random_without_replacement_per_epoch"
+    assert metrics["model_kind"] == "sequence_conv1d_meanpool_torch_v1"
+    assert metrics["training"]["conv_channels"] == 2
+    assert metrics["training"]["embedding_dim"] == 4
 
     with (output_dir / "cv_predictions.csv").open(newline="") as handle:
         predictions = list(csv.DictReader(handle))
     valid_predictions = [row for row in predictions if row["split"] == "valid"]
     assert len(valid_predictions) == 6
     assert {row["fly_id"] for row in valid_predictions} == {"a0", "a1", "a2", "b0", "b1", "b2"}
-    assert "actual_genotype" in predictions[0]
-    assert "actual_cohort" in predictions[0]

@@ -5,7 +5,8 @@ split_label_key: genotype
 random_seed: 0
 valid_fraction: 0.25
 hidden_dim: 32
-max_segments_per_fly: 200
+train_max_segments_per_fly: 200
+eval_max_segments_per_fly: 0
 learning_rate: 0.01
 max_iter: 100
 l2_reg: 0.0001

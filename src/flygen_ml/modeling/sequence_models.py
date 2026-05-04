@@ -35,6 +35,36 @@ def _evenly_spaced_indices(indices: np.ndarray, max_count: int | None) -> np.nda
     return indices[positions]
 
 
+def _random_sample_indices(
+    indices: np.ndarray,
+    max_count: int | None,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    if max_count is None or max_count <= 0 or len(indices) <= max_count:
+        return indices
+    sampled = rng.choice(indices, size=max_count, replace=False)
+    return np.sort(sampled)
+
+
+def _segment_cap_from_config(
+    config: dict[str, object],
+    *,
+    key: str,
+    fallback_key: str | None = None,
+    default: int | None = None,
+) -> int | None:
+    if key in config:
+        raw_value = config[key]
+    elif fallback_key is not None and fallback_key in config:
+        raw_value = config[fallback_key]
+    else:
+        raw_value = default
+    if raw_value is None:
+        return None
+    value = int(raw_value)
+    return value if value > 0 else None
+
+
 def load_sequence_npz(path: str) -> tuple[np.ndarray, list[FlySequenceExample], dict[str, object]]:
     payload = np.load(path)
     x = np.asarray(payload["x"], dtype=np.float32)
@@ -174,7 +204,10 @@ def predict_sequence_meanpool(
     means = np.asarray(model["input_means"], dtype=np.float32)
     stds = np.asarray(model["input_stds"], dtype=np.float32)
     flat_scaled = (x.reshape(x.shape[0], -1) - means) / stds
-    max_segments_per_fly = int(model.get("max_segments_per_fly", 0)) or None
+    if "eval_max_segments_per_fly" in model:
+        max_segments_per_fly = int(model.get("eval_max_segments_per_fly", 0)) or None
+    else:
+        max_segments_per_fly = int(model.get("max_segments_per_fly", 0)) or None
     return [
         _predict_one(flat_scaled, example, model, max_segments_per_fly=max_segments_per_fly)
         for example in examples
@@ -194,7 +227,24 @@ def train_sequence_meanpool(
     learning_rate = float(config.get("learning_rate", 0.01))
     l2_reg = float(config.get("l2_reg", 0.0001))
     random_seed = int(config.get("random_seed", 0))
-    max_segments_per_fly = int(config.get("max_segments_per_fly", 200))
+    train_max_segments_per_fly = _segment_cap_from_config(
+        config,
+        key="train_max_segments_per_fly",
+        fallback_key="max_segments_per_fly",
+        default=200,
+    )
+    eval_max_segments_per_fly = _segment_cap_from_config(
+        config,
+        key="eval_max_segments_per_fly",
+        fallback_key="max_segments_per_fly",
+        default=0,
+    )
+    scaler_max_segments_per_fly = _segment_cap_from_config(
+        config,
+        key="scaler_max_segments_per_fly",
+        fallback_key="train_max_segments_per_fly",
+        default=train_max_segments_per_fly,
+    )
 
     genotype_labels = sorted({example.genotype for example in examples})
     cohort_labels = sorted({example.cohort for example in examples})
@@ -205,7 +255,7 @@ def train_sequence_meanpool(
     genotype_to_index = {label: idx for idx, label in enumerate(genotype_labels)}
     cohort_to_index = {label: idx for idx, label in enumerate(cohort_labels)}
 
-    means, stds = _fit_scaler(x, examples, max_segments_per_fly)
+    means, stds = _fit_scaler(x, examples, scaler_max_segments_per_fly)
     flat_scaled = (x.reshape(x.shape[0], -1) - means) / stds
     model = _init_model(
         input_dim=flat_scaled.shape[1],
@@ -216,7 +266,10 @@ def train_sequence_meanpool(
     )
     model["input_means"] = means
     model["input_stds"] = stds
-    model["max_segments_per_fly"] = max_segments_per_fly
+    model["train_max_segments_per_fly"] = 0 if train_max_segments_per_fly is None else train_max_segments_per_fly
+    model["eval_max_segments_per_fly"] = 0 if eval_max_segments_per_fly is None else eval_max_segments_per_fly
+    model["scaler_max_segments_per_fly"] = 0 if scaler_max_segments_per_fly is None else scaler_max_segments_per_fly
+    model["segment_sampling"] = "random_without_replacement_per_epoch"
 
     w1 = np.asarray(model["encoder_weight"], dtype=np.float32)
     b1 = np.asarray(model["encoder_bias"], dtype=np.float32)
@@ -225,6 +278,7 @@ def train_sequence_meanpool(
     wc = np.asarray(model["cohort_weight"], dtype=np.float32)
     bc = np.asarray(model["cohort_bias"], dtype=np.float32)
 
+    rng = np.random.default_rng(random_seed + 1)
     for _ in range(max_iter):
         grad_w1 = np.zeros_like(w1)
         grad_b1 = np.zeros_like(b1)
@@ -233,7 +287,7 @@ def train_sequence_meanpool(
         grad_wc = np.zeros_like(wc)
         grad_bc = np.zeros_like(bc)
         for example in examples:
-            indices = _evenly_spaced_indices(example.segment_indices, max_segments_per_fly)
+            indices = _random_sample_indices(example.segment_indices, train_max_segments_per_fly, rng)
             segment_inputs = flat_scaled[indices]
             hidden_pre = segment_inputs @ w1 + b1
             segment_embeddings = np.tanh(hidden_pre)
