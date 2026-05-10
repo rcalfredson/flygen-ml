@@ -271,6 +271,17 @@ python -m flygen_ml.cli.train_sequence_model \
   --cv-folds 5
 ```
 
+To concatenate engineered fly-level movement summaries onto the learned
+trajectory embedding before the prediction heads:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_conv1d_meanpool_fused.yaml \
+  --sequences artifacts/sequences_v1.npz \
+  --output runs/segment_conv1d_meanpool_fused_v1_cv \
+  --cv-folds 5
+```
+
 ## Output Artifacts
 
 A standard holdout run writes:

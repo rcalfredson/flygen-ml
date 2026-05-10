@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from pathlib import Path
 
+import numpy as np
+
+from flygen_ml.modeling.baselines import NON_FEATURE_COLUMNS
 from flygen_ml.modeling.metrics import evidence_bin_for_n_segments, summarize_metrics
 from flygen_ml.modeling.sequence_models import (
     FlySequenceExample,
@@ -13,7 +17,7 @@ from flygen_ml.modeling.sequence_models import (
     train_sequence_meanpool,
 )
 from flygen_ml.modeling.splits import grouped_k_fold_splits, grouped_split
-from flygen_ml.modeling.train import load_simple_yaml
+from flygen_ml.modeling.train import load_feature_rows, load_simple_yaml
 
 
 def _example_rows(examples: list[FlySequenceExample], *, split_label_key: str) -> list[dict[str, object]]:
@@ -39,6 +43,68 @@ def _rows_to_examples(
     examples_by_fly: dict[str, FlySequenceExample],
 ) -> list[FlySequenceExample]:
     return [examples_by_fly[str(row["fly_id"])] for row in rows]
+
+
+def _parse_csv_list(value: object) -> list[str]:
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _numeric_value(value: object) -> float | None:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        try:
+            number = float(str(value))
+        except (TypeError, ValueError):
+            return None
+    return number if math.isfinite(number) else None
+
+
+def _side_feature_names(feature_rows: list[dict[str, object]], config: dict[str, object]) -> list[str]:
+    if "side_feature_names" in config:
+        return _parse_csv_list(config["side_feature_names"])
+    excluded = set(NON_FEATURE_COLUMNS)
+    excluded.update(_parse_csv_list(config.get("exclude_side_feature_names", "")))
+    if not bool(config.get("include_side_evidence_features", False)):
+        excluded.update({"n_segments", "n_segments_with_qc_flags"})
+    first = feature_rows[0]
+    return [
+        key
+        for key in first
+        if key not in excluded
+        and any(_numeric_value(row.get(key)) is not None for row in feature_rows)
+    ]
+
+
+def _load_side_inputs(
+    config: dict[str, object],
+    examples: list[FlySequenceExample],
+) -> tuple[dict[str, np.ndarray] | None, list[str]]:
+    side_features_path = str(config.get("side_features_path", "")).strip()
+    if not side_features_path:
+        return None, []
+    feature_rows = load_feature_rows(side_features_path)
+    feature_names = _side_feature_names(feature_rows, config)
+    if not feature_names:
+        raise ValueError("side_features_path was provided but no numeric side features were selected")
+    rows_by_key = {
+        (str(row["fly_id"]), str(row["sample_key"])): row
+        for row in feature_rows
+    }
+    side_inputs: dict[str, np.ndarray] = {}
+    for example in examples:
+        key = (example.fly_id, example.sample_key)
+        row = rows_by_key.get(key)
+        if row is None:
+            raise ValueError(f"missing side feature row for fly_id={example.fly_id!r}, sample_key={example.sample_key!r}")
+        values = [_numeric_value(row.get(name)) for name in feature_names]
+        side_inputs[example.fly_id] = np.asarray(
+            [0.0 if value is None else value for value in values],
+            dtype=np.float32,
+        )
+    return side_inputs, feature_names
 
 
 def _sequence_metrics(predictions: list[dict[str, object]]) -> dict[str, object]:
@@ -127,6 +193,8 @@ def _train_and_evaluate(
     valid_examples: list[FlySequenceExample],
     *,
     config: dict[str, object],
+    side_inputs: dict[str, np.ndarray] | None = None,
+    side_feature_names: list[str] | None = None,
 ) -> dict[str, object]:
     model_kind = str(config.get("model_kind", "sequence_meanpool_mlp_numpy_v1"))
     if model_kind == "sequence_conv1d_meanpool_torch_v1":
@@ -135,9 +203,25 @@ def _train_and_evaluate(
             train_torch_sequence_meanpool,
         )
 
-        model = train_torch_sequence_meanpool(x, train_examples, config=config)
-        train_predictions = predict_torch_sequence_meanpool(x, train_examples, model=model)
-        valid_predictions = predict_torch_sequence_meanpool(x, valid_examples, model=model)
+        model = train_torch_sequence_meanpool(
+            x,
+            train_examples,
+            config=config,
+            side_inputs=side_inputs,
+            side_feature_names=side_feature_names,
+        )
+        train_predictions = predict_torch_sequence_meanpool(
+            x,
+            train_examples,
+            model=model,
+            side_inputs=side_inputs,
+        )
+        valid_predictions = predict_torch_sequence_meanpool(
+            x,
+            valid_examples,
+            model=model,
+            side_inputs=side_inputs,
+        )
     elif model_kind in {"sequence_meanpool_mlp_numpy_v1", "sequence_meanpool"}:
         model = train_sequence_meanpool(x, train_examples, config=config)
         train_predictions = predict_sequence_meanpool(x, train_examples, model=model)
@@ -159,6 +243,9 @@ def _model_training_summary(model: dict[str, object]) -> dict[str, object]:
         "hidden_dim": model.get("hidden_dim"),
         "conv_channels": model.get("conv_channels"),
         "embedding_dim": model.get("embedding_dim"),
+        "fusion_hidden_dim": model.get("fusion_hidden_dim"),
+        "n_side_features": model.get("n_side_features"),
+        "side_feature_names": model.get("side_feature_names"),
         "dropout": model.get("dropout"),
         "learning_rate": model.get("learning_rate"),
         "weight_decay": model.get("weight_decay"),
@@ -179,6 +266,7 @@ def train_and_save_sequence_run(
 ) -> dict[str, object]:
     config = load_simple_yaml(config_path)
     x, examples, sequence_metadata = load_sequence_npz(str(sequence_path))
+    side_inputs, side_feature_names = _load_side_inputs(config, examples)
     split_label_key = str(config.get("split_label_key", "genotype"))
     valid_fraction = float(config.get("valid_fraction", 0.25))
     random_seed = int(config.get("random_seed", 0))
@@ -196,6 +284,8 @@ def train_and_save_sequence_run(
         _rows_to_examples(train_rows, examples_by_fly),
         _rows_to_examples(valid_rows, examples_by_fly),
         config=config,
+        side_inputs=side_inputs,
+        side_feature_names=side_feature_names,
     )
 
     out_dir = Path(output_dir)
@@ -249,6 +339,7 @@ def train_and_save_sequence_cross_validation_run(
 ) -> dict[str, object]:
     config = load_simple_yaml(config_path)
     x, examples, sequence_metadata = load_sequence_npz(str(sequence_path))
+    side_inputs, side_feature_names = _load_side_inputs(config, examples)
     split_label_key = str(config.get("split_label_key", "genotype"))
     random_seed = int(config.get("random_seed", 0))
     resolved_n_splits = int(n_splits or config.get("cv_folds", 5))
@@ -271,6 +362,8 @@ def train_and_save_sequence_cross_validation_run(
             _rows_to_examples(train_rows, examples_by_fly),
             _rows_to_examples(valid_rows, examples_by_fly),
             config={**config, "random_seed": random_seed + fold_idx},
+            side_inputs=side_inputs,
+            side_feature_names=side_feature_names,
         )
         model_kind = str(dict(split_result["model"])["model_kind"])
         training_summary = _model_training_summary(dict(split_result["model"]))

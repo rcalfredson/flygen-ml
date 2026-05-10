@@ -75,6 +75,28 @@ def _scaled_sequences(x: np.ndarray, means: np.ndarray, stds: np.ndarray) -> np.
     return ((x - means.reshape(1, 1, -1)) / stds.reshape(1, 1, -1)).astype(np.float32)
 
 
+def _fit_side_scaler(
+    examples: list[FlySequenceExample],
+    side_inputs: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    matrix = np.stack([side_inputs[example.fly_id] for example in examples]).astype(np.float32)
+    means = matrix.mean(axis=0)
+    stds = matrix.std(axis=0)
+    stds = np.where(stds > 1e-6, stds, 1.0)
+    return means.astype(np.float32), stds.astype(np.float32)
+
+
+def _scaled_side_input(
+    example: FlySequenceExample,
+    side_inputs: dict[str, np.ndarray] | None,
+    means: np.ndarray,
+    stds: np.ndarray,
+) -> np.ndarray | None:
+    if side_inputs is None:
+        return None
+    return ((side_inputs[example.fly_id] - means) / stds).astype(np.float32)
+
+
 def _resolve_device(torch: Any, config: dict[str, object]):
     requested = str(config.get("device", "auto"))
     if requested == "auto":
@@ -90,6 +112,8 @@ def _build_module(
     n_channels: int,
     conv_channels: int,
     embedding_dim: int,
+    n_side_features: int,
+    fusion_hidden_dim: int,
     n_genotype_classes: int,
     n_cohort_classes: int,
     dropout: float,
@@ -112,14 +136,28 @@ def _build_module(
                 nn.ReLU(),
                 nn.Dropout(dropout),
             )
-            self.genotype_head = nn.Linear(embedding_dim, n_genotype_classes)
-            self.cohort_head = nn.Linear(embedding_dim, n_cohort_classes)
+            if n_side_features > 0:
+                self.fusion = nn.Sequential(
+                    nn.Linear(embedding_dim + n_side_features, fusion_hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                )
+                head_input_dim = fusion_hidden_dim
+            else:
+                self.fusion = None
+                head_input_dim = embedding_dim
+            self.genotype_head = nn.Linear(head_input_dim, n_genotype_classes)
+            self.cohort_head = nn.Linear(head_input_dim, n_cohort_classes)
 
         def encode_segments(self, segments):
             return self.projection(self.segment_encoder(segments))
 
-        def forward_fly(self, segments):
+        def forward_fly(self, segments, side_features=None):
             fly_embedding = self.encode_segments(segments).mean(dim=0)
+            if self.fusion is not None:
+                if side_features is None:
+                    raise ValueError("side_features are required for this fused sequence model")
+                fly_embedding = self.fusion(torch.cat([fly_embedding, side_features], dim=0))
             return self.genotype_head(fly_embedding), self.cohort_head(fly_embedding)
 
     return SegmentConvMeanPool()
@@ -137,6 +175,8 @@ def train_torch_sequence_meanpool(
     examples: list[FlySequenceExample],
     *,
     config: dict[str, object],
+    side_inputs: dict[str, np.ndarray] | None = None,
+    side_feature_names: list[str] | None = None,
 ) -> dict[str, object]:
     if not examples:
         raise ValueError("cannot train torch sequence model with no fly examples")
@@ -151,6 +191,7 @@ def train_torch_sequence_meanpool(
     weight_decay = float(config.get("weight_decay", config.get("l2_reg", 0.0001)))
     conv_channels = int(config.get("conv_channels", 32))
     embedding_dim = int(config.get("embedding_dim", config.get("hidden_dim", 64)))
+    fusion_hidden_dim = int(config.get("fusion_hidden_dim", embedding_dim))
     dropout = float(config.get("dropout", 0.1))
     cohort_loss_weight = float(config.get("cohort_loss_weight", 1.0))
     train_max_segments_per_fly = _segment_cap_from_config(
@@ -182,11 +223,19 @@ def train_torch_sequence_meanpool(
 
     means, stds = _fit_channel_scaler(x, examples, scaler_max_segments_per_fly)
     x_scaled = _scaled_sequences(x, means, stds)
+    resolved_side_feature_names = side_feature_names or []
+    if side_inputs is None:
+        side_means = np.zeros(0, dtype=np.float32)
+        side_stds = np.ones(0, dtype=np.float32)
+    else:
+        side_means, side_stds = _fit_side_scaler(examples, side_inputs)
     device = _resolve_device(torch, config)
     module = _build_module(
         n_channels=x.shape[2],
         conv_channels=conv_channels,
         embedding_dim=embedding_dim,
+        n_side_features=len(resolved_side_feature_names),
+        fusion_hidden_dim=fusion_hidden_dim,
         n_genotype_classes=len(genotype_labels),
         n_cohort_classes=len(cohort_labels),
         dropout=dropout,
@@ -201,7 +250,11 @@ def train_torch_sequence_meanpool(
         for example in examples:
             indices = _random_sample_indices(example.segment_indices, train_max_segments_per_fly, rng)
             segment_batch = torch.as_tensor(x_scaled[indices], dtype=torch.float32, device=device).permute(0, 2, 1)
-            genotype_logits, cohort_logits = module.forward_fly(segment_batch)
+            raw_side_input = _scaled_side_input(example, side_inputs, side_means, side_stds)
+            side_tensor = (
+                None if raw_side_input is None else torch.as_tensor(raw_side_input, dtype=torch.float32, device=device)
+            )
+            genotype_logits, cohort_logits = module.forward_fly(segment_batch, side_tensor)
             genotype_target = torch.tensor([genotype_to_index[example.genotype]], dtype=torch.long, device=device)
             cohort_target = torch.tensor([cohort_to_index[example.cohort]], dtype=torch.long, device=device)
             loss = criterion(genotype_logits.unsqueeze(0), genotype_target)
@@ -220,7 +273,12 @@ def train_torch_sequence_meanpool(
         "n_channels": x.shape[2],
         "conv_channels": conv_channels,
         "embedding_dim": embedding_dim,
+        "fusion_hidden_dim": fusion_hidden_dim,
         "dropout": dropout,
+        "side_feature_names": resolved_side_feature_names,
+        "side_input_means": side_means,
+        "side_input_stds": side_stds,
+        "n_side_features": len(resolved_side_feature_names),
         "cohort_loss_weight": cohort_loss_weight,
         "max_iter": max_iter,
         "learning_rate": learning_rate,
@@ -238,6 +296,7 @@ def predict_torch_sequence_meanpool(
     examples: list[FlySequenceExample],
     *,
     model: dict[str, object],
+    side_inputs: dict[str, np.ndarray] | None = None,
 ) -> list[dict[str, object]]:
     torch, _ = _import_torch()
     module = model["module"]
@@ -246,6 +305,15 @@ def predict_torch_sequence_meanpool(
     means = np.asarray(model["input_means"], dtype=np.float32)
     stds = np.asarray(model["input_stds"], dtype=np.float32)
     x_scaled = _scaled_sequences(x, means, stds)
+    side_feature_names = [str(name) for name in model.get("side_feature_names", [])]
+    if side_feature_names:
+        if side_inputs is None:
+            raise ValueError("side_inputs are required to predict with this fused sequence model")
+        side_means = np.asarray(model["side_input_means"], dtype=np.float32)
+        side_stds = np.asarray(model["side_input_stds"], dtype=np.float32)
+    else:
+        side_means = np.zeros(0, dtype=np.float32)
+        side_stds = np.ones(0, dtype=np.float32)
     max_segments_per_fly = int(model.get("eval_max_segments_per_fly", 0)) or None
     genotype_labels = [str(label) for label in model["genotype_labels"]]
     cohort_labels = [str(label) for label in model["cohort_labels"]]
@@ -254,7 +322,11 @@ def predict_torch_sequence_meanpool(
         for example in examples:
             indices = _evenly_spaced_indices(example.segment_indices, max_segments_per_fly)
             segment_batch = torch.as_tensor(x_scaled[indices], dtype=torch.float32, device=device).permute(0, 2, 1)
-            genotype_logits, cohort_logits = module.forward_fly(segment_batch)
+            raw_side_input = _scaled_side_input(example, side_inputs, side_means, side_stds)
+            side_tensor = (
+                None if raw_side_input is None else torch.as_tensor(raw_side_input, dtype=torch.float32, device=device)
+            )
+            genotype_logits, cohort_logits = module.forward_fly(segment_batch, side_tensor)
             genotype_probs = torch.softmax(genotype_logits, dim=0).detach().cpu().numpy()
             cohort_probs = torch.softmax(cohort_logits, dim=0).detach().cpu().numpy()
             genotype_idx = int(genotype_probs.argmax())

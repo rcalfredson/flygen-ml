@@ -52,6 +52,22 @@ def _write_sequence_fixture(path):
     )
 
 
+def _write_feature_fixture(path):
+    path.write_text(
+        "\n".join(
+            [
+                "fly_id,sample_key,genotype,cohort,chamber_type,training_idx,n_segments,n_segments_with_qc_flags,path_length_px_mean,straightness_mean",
+                "a0,s_a0,A,intact,large,1,2,0,1.0,0.1",
+                "a1,s_a1,A,intact,large,1,2,0,1.1,0.2",
+                "a2,s_a2,A,intact,large,1,2,0,0.9,0.3",
+                "b0,s_b0,B,removed,large,1,2,1,3.0,0.8",
+                "b1,s_b1,B,removed,large,1,2,1,3.1,0.9",
+                "b2,s_b2,B,removed,large,1,2,1,2.9,0.7",
+            ]
+        )
+    )
+
+
 def test_torch_sequence_cross_validation_run_writes_fly_level_outputs(tmp_path):
     sequence_path = tmp_path / "sequences.npz"
     _write_sequence_fixture(sequence_path)
@@ -96,3 +112,47 @@ def test_torch_sequence_cross_validation_run_writes_fly_level_outputs(tmp_path):
     valid_predictions = [row for row in predictions if row["split"] == "valid"]
     assert len(valid_predictions) == 6
     assert {row["fly_id"] for row in valid_predictions} == {"a0", "a1", "a2", "b0", "b1", "b2"}
+
+
+def test_torch_sequence_cross_validation_supports_side_features(tmp_path):
+    sequence_path = tmp_path / "sequences.npz"
+    features_path = tmp_path / "features.csv"
+    _write_sequence_fixture(sequence_path)
+    _write_feature_fixture(features_path)
+    config_path = tmp_path / "segment_conv1d_fused.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "model_name: segment_conv1d_meanpool_fused_v1",
+                "model_kind: sequence_conv1d_meanpool_torch_v1",
+                "split_label_key: genotype",
+                "random_seed: 3",
+                "conv_channels: 2",
+                "embedding_dim: 4",
+                "fusion_hidden_dim: 5",
+                "dropout: 0.0",
+                "train_max_segments_per_fly: 1",
+                "eval_max_segments_per_fly: 0",
+                f"side_features_path: {features_path}",
+                "side_feature_names: path_length_px_mean,straightness_mean",
+                "learning_rate: 0.001",
+                "max_iter: 1",
+                "weight_decay: 0.0",
+                "device: cpu",
+            ]
+        )
+    )
+    output_dir = tmp_path / "run"
+
+    metadata = train_and_save_sequence_cross_validation_run(
+        config_path=config_path,
+        sequence_path=sequence_path,
+        output_dir=output_dir,
+        n_splits=3,
+    )
+
+    assert metadata["n_side_features"] == 2
+    assert metadata["side_feature_names"] == ["path_length_px_mean", "straightness_mean"]
+    metrics = json.loads((output_dir / "cv_metrics_summary.json").read_text())
+    assert metrics["training"]["fusion_hidden_dim"] == 5
+    assert metrics["training"]["side_feature_names"] == ["path_length_px_mean", "straightness_mean"]
