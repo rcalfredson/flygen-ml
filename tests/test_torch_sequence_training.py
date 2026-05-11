@@ -202,3 +202,51 @@ def test_torch_sequence_cross_validation_supports_attention_pooling(tmp_path):
     metrics = json.loads((output_dir / "cv_metrics_summary.json").read_text())
     assert metrics["training"]["pooling"] == "attention"
     assert metrics["training"]["attention_hidden_dim"] == 3
+
+
+def test_torch_sequence_cross_validation_supports_mean_attention_concat_pooling(tmp_path):
+    sequence_path = tmp_path / "sequences.npz"
+    features_path = tmp_path / "features.csv"
+    _write_sequence_fixture(sequence_path)
+    _write_feature_fixture(features_path)
+    config_path = tmp_path / "segment_conv1d_mean_attention.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "model_name: segment_conv1d_mean_attnpool_fused_v1",
+                "model_kind: sequence_conv1d_meanpool_torch_v1",
+                "split_label_key: genotype",
+                "random_seed: 3",
+                "conv_channels: 2",
+                "embedding_dim: 4",
+                "fusion_hidden_dim: 5",
+                "pooling: mean_attention_concat",
+                "attention_hidden_dim: 3",
+                "dropout: 0.0",
+                "train_max_segments_per_fly: 1",
+                "eval_max_segments_per_fly: 0",
+                f"side_features_path: {features_path}",
+                "side_feature_names: path_length_px_mean,straightness_mean",
+                "learning_rate: 0.001",
+                "max_iter: 1",
+                "weight_decay: 0.0",
+                "device: cpu",
+            ]
+        )
+    )
+    output_dir = tmp_path / "run"
+
+    metadata = train_and_save_sequence_cross_validation_run(
+        config_path=config_path,
+        sequence_path=sequence_path,
+        output_dir=output_dir,
+        n_splits=3,
+    )
+
+    assert metadata["pooling"] == "mean_attention_concat"
+    assert metadata["attention_hidden_dim"] == 3
+    assert metadata["pooled_embedding_dim"] == 8
+    metrics = json.loads((output_dir / "cv_metrics_summary.json").read_text())
+    assert metrics["training"]["pooling"] == "mean_attention_concat"
+    assert metrics["training"]["attention_hidden_dim"] == 3
+    assert metrics["training"]["pooled_embedding_dim"] == 8

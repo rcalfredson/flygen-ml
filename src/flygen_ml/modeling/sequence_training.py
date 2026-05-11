@@ -243,6 +243,7 @@ def _model_training_summary(model: dict[str, object]) -> dict[str, object]:
         "hidden_dim": model.get("hidden_dim"),
         "conv_channels": model.get("conv_channels"),
         "embedding_dim": model.get("embedding_dim"),
+        "pooled_embedding_dim": model.get("pooled_embedding_dim"),
         "fusion_hidden_dim": model.get("fusion_hidden_dim"),
         "pooling": model.get("pooling"),
         "attention_hidden_dim": model.get("attention_hidden_dim"),

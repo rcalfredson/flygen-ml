@@ -121,6 +121,11 @@ def _build_module(
     dropout: float,
 ):
     torch, nn = _import_torch()
+    attention_pooling_modes = {"attention", "mean_attention_concat"}
+    accepted_pooling_modes = {"mean", *attention_pooling_modes}
+    if pooling not in accepted_pooling_modes:
+        raise ValueError(f"unsupported pooling: {pooling!r}")
+    pooled_embedding_dim = embedding_dim * 2 if pooling == "mean_attention_concat" else embedding_dim
 
     class SegmentConvMeanPool(nn.Module):
         def __init__(self) -> None:
@@ -138,26 +143,25 @@ def _build_module(
                 nn.ReLU(),
                 nn.Dropout(dropout),
             )
-            if pooling == "attention":
+            self.pooling = pooling
+            if pooling in attention_pooling_modes:
                 self.attention = nn.Sequential(
                     nn.Linear(embedding_dim, attention_hidden_dim),
                     nn.Tanh(),
                     nn.Linear(attention_hidden_dim, 1),
                 )
-            elif pooling == "mean":
-                self.attention = None
             else:
-                raise ValueError(f"unsupported pooling: {pooling!r}")
+                self.attention = None
             if n_side_features > 0:
                 self.fusion = nn.Sequential(
-                    nn.Linear(embedding_dim + n_side_features, fusion_hidden_dim),
+                    nn.Linear(pooled_embedding_dim + n_side_features, fusion_hidden_dim),
                     nn.ReLU(),
                     nn.Dropout(dropout),
                 )
                 head_input_dim = fusion_hidden_dim
             else:
                 self.fusion = None
-                head_input_dim = embedding_dim
+                head_input_dim = pooled_embedding_dim
             self.genotype_head = nn.Linear(head_input_dim, n_genotype_classes)
             self.cohort_head = nn.Linear(head_input_dim, n_cohort_classes)
 
@@ -165,11 +169,15 @@ def _build_module(
             return self.projection(self.segment_encoder(segments))
 
         def pool_segments(self, segment_embeddings):
-            if self.attention is None:
-                return segment_embeddings.mean(dim=0)
+            mean_embedding = segment_embeddings.mean(dim=0)
+            if self.pooling == "mean":
+                return mean_embedding
             attention_logits = self.attention(segment_embeddings).squeeze(-1)
             attention_weights = torch.softmax(attention_logits, dim=0)
-            return (segment_embeddings * attention_weights.unsqueeze(-1)).sum(dim=0)
+            attention_embedding = (segment_embeddings * attention_weights.unsqueeze(-1)).sum(dim=0)
+            if self.pooling == "attention":
+                return attention_embedding
+            return torch.cat([mean_embedding, attention_embedding], dim=0)
 
         def forward_fly(self, segments, side_features=None):
             fly_embedding = self.pool_segments(self.encode_segments(segments))
@@ -263,6 +271,7 @@ def train_torch_sequence_meanpool(
         n_cohort_classes=len(cohort_labels),
         dropout=dropout,
     ).to(device)
+    pooled_embedding_dim = embedding_dim * 2 if pooling == "mean_attention_concat" else embedding_dim
     optimizer = torch.optim.Adam(module.parameters(), lr=learning_rate, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
     rng = np.random.default_rng(random_seed + 1)
@@ -296,6 +305,7 @@ def train_torch_sequence_meanpool(
         "n_channels": x.shape[2],
         "conv_channels": conv_channels,
         "embedding_dim": embedding_dim,
+        "pooled_embedding_dim": pooled_embedding_dim,
         "fusion_hidden_dim": fusion_hidden_dim,
         "pooling": pooling,
         "attention_hidden_dim": attention_hidden_dim,
