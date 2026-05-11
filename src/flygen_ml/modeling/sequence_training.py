@@ -258,6 +258,7 @@ def _model_training_summary(model: dict[str, object]) -> dict[str, object]:
         "weight_decay": model.get("weight_decay"),
         "max_iter": model.get("max_iter"),
         "device": model.get("device"),
+        "random_seed": model.get("random_seed"),
         "train_max_segments_per_fly": model.get("train_max_segments_per_fly"),
         "eval_max_segments_per_fly": model.get("eval_max_segments_per_fly"),
         "scaler_max_segments_per_fly": model.get("scaler_max_segments_per_fly"),
@@ -270,8 +271,11 @@ def train_and_save_sequence_run(
     config_path: str | Path,
     sequence_path: str | Path,
     output_dir: str | Path,
+    random_seed: int | None = None,
 ) -> dict[str, object]:
     config = load_simple_yaml(config_path)
+    if random_seed is not None:
+        config = {**config, "random_seed": int(random_seed)}
     x, examples, sequence_metadata = load_sequence_npz(str(sequence_path))
     side_inputs, side_feature_names = _load_side_inputs(config, examples)
     split_label_key = str(config.get("split_label_key", "genotype"))
@@ -343,8 +347,11 @@ def train_and_save_sequence_cross_validation_run(
     sequence_path: str | Path,
     output_dir: str | Path,
     n_splits: int | None = None,
+    random_seed: int | None = None,
 ) -> dict[str, object]:
     config = load_simple_yaml(config_path)
+    if random_seed is not None:
+        config = {**config, "random_seed": int(random_seed)}
     x, examples, sequence_metadata = load_sequence_npz(str(sequence_path))
     side_inputs, side_feature_names = _load_side_inputs(config, examples)
     split_label_key = str(config.get("split_label_key", "genotype"))
@@ -400,6 +407,7 @@ def train_and_save_sequence_cross_validation_run(
             "model_kind": model_kind,
             "sequence_metadata": sequence_metadata,
             "training": training_summary or {},
+            "random_seed": random_seed,
             "n_folds": resolved_n_splits,
             "folds": fold_summaries,
         },
@@ -413,6 +421,7 @@ def train_and_save_sequence_cross_validation_run(
         "sequence_path": str(sequence_path),
         "split_label_key": split_label_key,
         **(training_summary or {}),
+        "random_seed": random_seed,
         "n_folds": resolved_n_splits,
         "flies": len(examples),
         "metrics_summary_path": str(out_dir / "cv_metrics_summary.json"),

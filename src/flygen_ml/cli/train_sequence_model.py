@@ -19,6 +19,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Run grouped K-fold cross-validation instead of a single holdout split.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Override random_seed from the config file.",
+    )
     return parser
 
 
@@ -30,6 +36,7 @@ def main() -> int:
             sequence_path=args.sequences,
             output_dir=args.output,
             n_splits=args.cv_folds,
+            random_seed=args.seed,
         )
         print(
             f"trained {metadata['model_kind']} with {metadata['n_folds']} "
@@ -41,6 +48,7 @@ def main() -> int:
         config_path=args.config,
         sequence_path=args.sequences,
         output_dir=args.output,
+        random_seed=args.seed,
     )
     print(
         f"trained {metadata['model_kind']} with {metadata['train_flies']} train flies "

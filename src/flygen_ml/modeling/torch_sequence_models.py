@@ -379,6 +379,7 @@ def train_torch_sequence_meanpool(
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
         "device": str(device),
+        "random_seed": random_seed,
         "train_max_segments_per_fly": 0 if train_max_segments_per_fly is None else train_max_segments_per_fly,
         "eval_max_segments_per_fly": 0 if eval_max_segments_per_fly is None else eval_max_segments_per_fly,
         "scaler_max_segments_per_fly": 0 if scaler_max_segments_per_fly is None else scaler_max_segments_per_fly,

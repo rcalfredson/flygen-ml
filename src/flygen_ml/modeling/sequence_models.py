@@ -270,6 +270,7 @@ def train_sequence_meanpool(
     model["eval_max_segments_per_fly"] = 0 if eval_max_segments_per_fly is None else eval_max_segments_per_fly
     model["scaler_max_segments_per_fly"] = 0 if scaler_max_segments_per_fly is None else scaler_max_segments_per_fly
     model["segment_sampling"] = "random_without_replacement_per_epoch"
+    model["random_seed"] = random_seed
 
     w1 = np.asarray(model["encoder_weight"], dtype=np.float32)
     b1 = np.asarray(model["encoder_bias"], dtype=np.float32)

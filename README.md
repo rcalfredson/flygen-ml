@@ -282,6 +282,18 @@ python -m flygen_ml.cli.train_sequence_model \
   --cv-folds 5
 ```
 
+Use `--seed` to override `random_seed` from the config without creating a
+seed-specific config file:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_conv1d_headpool_fused_wide.yaml \
+  --sequences artifacts/sequences_v1.npz \
+  --output runs/segment_conv1d_headpool_fused_wide_v1_seed1_cv \
+  --cv-folds 5 \
+  --seed 1
+```
+
 ## Output Artifacts
 
 A standard holdout run writes:

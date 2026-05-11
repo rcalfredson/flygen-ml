@@ -93,3 +93,39 @@ def test_train_and_save_sequence_cross_validation_run_writes_fly_level_outputs(t
     assert {row["fly_id"] for row in valid_predictions} == {"a0", "a1", "a2", "b0", "b1", "b2"}
     assert "actual_genotype" in predictions[0]
     assert "actual_cohort" in predictions[0]
+
+
+def test_train_and_save_sequence_cross_validation_run_overrides_config_seed(tmp_path):
+    sequence_path = tmp_path / "sequences.npz"
+    _write_sequence_fixture(sequence_path)
+    config_path = tmp_path / "segment_meanpool.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "model_name: segment_meanpool_v1",
+                "model_kind: sequence_meanpool_mlp_numpy_v1",
+                "split_label_key: genotype",
+                "random_seed: 3",
+                "hidden_dim: 4",
+                "train_max_segments_per_fly: 1",
+                "eval_max_segments_per_fly: 0",
+                "learning_rate: 0.05",
+                "max_iter: 1",
+                "l2_reg: 0.0",
+            ]
+        )
+    )
+    output_dir = tmp_path / "run"
+
+    metadata = train_and_save_sequence_cross_validation_run(
+        config_path=config_path,
+        sequence_path=sequence_path,
+        output_dir=output_dir,
+        n_splits=3,
+        random_seed=11,
+    )
+
+    metrics = json.loads((output_dir / "cv_metrics_summary.json").read_text())
+    assert metadata["random_seed"] == 11
+    assert metrics["random_seed"] == 11
+    assert metrics["training"]["random_seed"] == 13
