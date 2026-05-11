@@ -114,6 +114,8 @@ def _build_module(
     embedding_dim: int,
     n_side_features: int,
     fusion_hidden_dim: int,
+    pooling: str,
+    attention_hidden_dim: int,
     n_genotype_classes: int,
     n_cohort_classes: int,
     dropout: float,
@@ -136,6 +138,16 @@ def _build_module(
                 nn.ReLU(),
                 nn.Dropout(dropout),
             )
+            if pooling == "attention":
+                self.attention = nn.Sequential(
+                    nn.Linear(embedding_dim, attention_hidden_dim),
+                    nn.Tanh(),
+                    nn.Linear(attention_hidden_dim, 1),
+                )
+            elif pooling == "mean":
+                self.attention = None
+            else:
+                raise ValueError(f"unsupported pooling: {pooling!r}")
             if n_side_features > 0:
                 self.fusion = nn.Sequential(
                     nn.Linear(embedding_dim + n_side_features, fusion_hidden_dim),
@@ -152,8 +164,15 @@ def _build_module(
         def encode_segments(self, segments):
             return self.projection(self.segment_encoder(segments))
 
+        def pool_segments(self, segment_embeddings):
+            if self.attention is None:
+                return segment_embeddings.mean(dim=0)
+            attention_logits = self.attention(segment_embeddings).squeeze(-1)
+            attention_weights = torch.softmax(attention_logits, dim=0)
+            return (segment_embeddings * attention_weights.unsqueeze(-1)).sum(dim=0)
+
         def forward_fly(self, segments, side_features=None):
-            fly_embedding = self.encode_segments(segments).mean(dim=0)
+            fly_embedding = self.pool_segments(self.encode_segments(segments))
             if self.fusion is not None:
                 if side_features is None:
                     raise ValueError("side_features are required for this fused sequence model")
@@ -192,6 +211,8 @@ def train_torch_sequence_meanpool(
     conv_channels = int(config.get("conv_channels", 32))
     embedding_dim = int(config.get("embedding_dim", config.get("hidden_dim", 64)))
     fusion_hidden_dim = int(config.get("fusion_hidden_dim", embedding_dim))
+    pooling = str(config.get("pooling", "mean"))
+    attention_hidden_dim = int(config.get("attention_hidden_dim", embedding_dim))
     dropout = float(config.get("dropout", 0.1))
     cohort_loss_weight = float(config.get("cohort_loss_weight", 1.0))
     train_max_segments_per_fly = _segment_cap_from_config(
@@ -236,6 +257,8 @@ def train_torch_sequence_meanpool(
         embedding_dim=embedding_dim,
         n_side_features=len(resolved_side_feature_names),
         fusion_hidden_dim=fusion_hidden_dim,
+        pooling=pooling,
+        attention_hidden_dim=attention_hidden_dim,
         n_genotype_classes=len(genotype_labels),
         n_cohort_classes=len(cohort_labels),
         dropout=dropout,
@@ -274,6 +297,8 @@ def train_torch_sequence_meanpool(
         "conv_channels": conv_channels,
         "embedding_dim": embedding_dim,
         "fusion_hidden_dim": fusion_hidden_dim,
+        "pooling": pooling,
+        "attention_hidden_dim": attention_hidden_dim,
         "dropout": dropout,
         "side_feature_names": resolved_side_feature_names,
         "side_input_means": side_means,

@@ -244,6 +244,8 @@ def _model_training_summary(model: dict[str, object]) -> dict[str, object]:
         "conv_channels": model.get("conv_channels"),
         "embedding_dim": model.get("embedding_dim"),
         "fusion_hidden_dim": model.get("fusion_hidden_dim"),
+        "pooling": model.get("pooling"),
+        "attention_hidden_dim": model.get("attention_hidden_dim"),
         "n_side_features": model.get("n_side_features"),
         "side_feature_names": model.get("side_feature_names"),
         "dropout": model.get("dropout"),
