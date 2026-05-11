@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from flygen_ml.features.sequence import build_sequence_sample
+from flygen_ml.features.sequence import RICH_SEQUENCE_CHANNELS, build_sequence_sample
 from flygen_ml.schema import ManifestRow, NormalizedRecording, SegmentRecord
 
 
@@ -72,3 +72,22 @@ def test_build_sequence_sample_exports_reward_normalized_channels():
     assert sample.channels == ("x_rel", "y_rel", "dx_rel", "dy_rel", "speed_rel", "r_rel")
     np.testing.assert_allclose(sample.x[:, 0], [0.5, 1.0, 1.5, 2.0])
     np.testing.assert_allclose(sample.x[:, 1], [0.0, 0.5, 0.5, 1.0])
+
+
+def test_build_sequence_sample_exports_rich_motion_channels():
+    sample = build_sequence_sample(
+        _recording(),
+        _segment(),
+        target_length=4,
+        channels=RICH_SEQUENCE_CHANNELS,
+    )
+
+    assert sample.x.shape == (4, 13)
+    assert sample.channels == RICH_SEQUENCE_CHANNELS
+    np.testing.assert_allclose(sample.x[:, 4], [0.0, np.sqrt(0.5), 0.5, np.sqrt(0.5)])
+    np.testing.assert_allclose(sample.x[:, 5], [0.0, np.sqrt(0.5), 0.5 - np.sqrt(0.5), np.sqrt(0.5) - 0.5])
+    np.testing.assert_allclose(sample.x[:, 7], [0.0, 0.6708204, 0.47434166, 0.6708204], rtol=1e-6)
+    np.testing.assert_allclose(sample.x[:, 8], [0.0, 0.2236068, -0.15811388, 0.2236068], rtol=1e-6)
+    np.testing.assert_allclose(sample.x[:, 9], [0.0, np.sqrt(0.5), 0.0, np.sqrt(0.5)])
+    np.testing.assert_allclose(sample.x[:, 10], [0.0, np.sqrt(0.5), 1.0, np.sqrt(0.5)])
+    np.testing.assert_allclose(sample.x[:, 11], [0.0, np.sqrt(0.5), -np.sqrt(0.5), np.sqrt(0.5)])

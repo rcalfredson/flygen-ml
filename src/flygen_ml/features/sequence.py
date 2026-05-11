@@ -10,6 +10,25 @@ from flygen_ml.schema import ManifestRow, SegmentRecord, SequenceSample
 
 
 DEFAULT_SEQUENCE_CHANNELS = ("x_rel", "y_rel", "dx_rel", "dy_rel", "speed_rel", "r_rel")
+RICH_SEQUENCE_CHANNELS = (
+    "x_rel",
+    "y_rel",
+    "dx_rel",
+    "dy_rel",
+    "speed_rel",
+    "accel_rel",
+    "r_rel",
+    "radial_velocity_rel",
+    "tangential_speed_rel",
+    "heading_sin",
+    "heading_cos",
+    "turn_sin",
+    "turn_cos",
+)
+SEQUENCE_CHANNEL_SETS = {
+    "default": DEFAULT_SEQUENCE_CHANNELS,
+    "rich": RICH_SEQUENCE_CHANNELS,
+}
 
 
 def _manifest_row_from_segment(segment: SegmentRecord) -> ManifestRow:
@@ -68,6 +87,12 @@ def _resample_channels(
     return x, np.logical_and.reduce(masks)
 
 
+def _safe_divide(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
+    out = np.zeros_like(numerator, dtype=float)
+    np.divide(numerator, denominator, out=out, where=denominator > 0)
+    return out
+
+
 def build_sequence_sample(
     recording,
     segment: SegmentRecord,
@@ -87,14 +112,30 @@ def build_sequence_sample(
     dx_rel = np.concatenate(([0.0], np.diff(x_rel))) if x_rel.size else np.array([], dtype=float)
     dy_rel = np.concatenate(([0.0], np.diff(y_rel))) if y_rel.size else np.array([], dtype=float)
     speed_rel = np.sqrt(dx_rel**2 + dy_rel**2)
+    accel_rel = np.concatenate(([0.0], np.diff(speed_rel))) if speed_rel.size else np.array([], dtype=float)
     r_rel = np.sqrt(x_rel**2 + y_rel**2)
+    radial_velocity_rel = _safe_divide(x_rel * dx_rel + y_rel * dy_rel, r_rel)
+    tangential_speed_rel = _safe_divide(x_rel * dy_rel - y_rel * dx_rel, r_rel)
+    heading_sin = _safe_divide(dy_rel, speed_rel)
+    heading_cos = _safe_divide(dx_rel, speed_rel)
+    heading = np.arctan2(dy_rel, dx_rel) if dx_rel.size else np.array([], dtype=float)
+    turn = np.concatenate(([0.0], np.diff(np.unwrap(heading)))) if heading.size else np.array([], dtype=float)
+    turn_sin = np.sin(turn)
+    turn_cos = np.cos(turn)
     channel_values = {
         "x_rel": x_rel,
         "y_rel": y_rel,
         "dx_rel": dx_rel,
         "dy_rel": dy_rel,
         "speed_rel": speed_rel,
+        "accel_rel": accel_rel,
         "r_rel": r_rel,
+        "radial_velocity_rel": radial_velocity_rel,
+        "tangential_speed_rel": tangential_speed_rel,
+        "heading_sin": heading_sin,
+        "heading_cos": heading_cos,
+        "turn_sin": turn_sin,
+        "turn_cos": turn_cos,
     }
     missing = [channel for channel in channels if channel not in channel_values]
     if missing:

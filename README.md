@@ -233,6 +233,18 @@ The default channels are `x_rel`, `y_rel`, `dx_rel`, `dy_rel`, `speed_rel`, and
 `r_rel`, where positions are centered on the reward location and scaled by the
 reward radius.
 
+To export a richer per-timestep motion representation, use `--channel-set rich`.
+This keeps the same fly-level training path but adds channels for acceleration,
+radial/tangential motion, heading, and turning:
+
+```bash
+python -m flygen_ml.cli.export_sequence_tensors \
+  --segments artifacts/segments_with_cohort.csv \
+  --output artifacts/sequences_rich_v1.npz \
+  --target-length 128 \
+  --channel-set rich
+```
+
 ### 9. Train A Fly-Level Sequence Model
 
 The first sequence model is a small NumPy baseline: flatten each segment tensor,
