@@ -56,6 +56,24 @@ def _random_sample_indices(
     return np.sort(sampled)
 
 
+def _random_contiguous_indices(
+    indices: np.ndarray,
+    max_count: int | None,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    if max_count is None or max_count <= 0 or len(indices) <= max_count:
+        return indices
+    start = int(rng.integers(0, len(indices) - max_count + 1))
+    return indices[start : start + max_count]
+
+
+def _centered_contiguous_indices(indices: np.ndarray, max_count: int | None) -> np.ndarray:
+    if max_count is None or max_count <= 0 or len(indices) <= max_count:
+        return indices
+    start = (len(indices) - max_count) // 2
+    return indices[start : start + max_count]
+
+
 def _fit_channel_scaler(
     x: np.ndarray,
     examples: list[FlySequenceExample],
@@ -117,6 +135,9 @@ def _build_module(
     pooling: str,
     genotype_pooling: str | None,
     cohort_pooling: str | None,
+    sequence_unit: str,
+    chain_length: int,
+    chain_stride: int,
     attention_hidden_dim: int,
     n_genotype_classes: int,
     n_cohort_classes: int,
@@ -125,6 +146,13 @@ def _build_module(
     torch, nn = _import_torch()
     attention_pooling_modes = {"attention", "mean_attention_concat"}
     accepted_pooling_modes = {"mean", *attention_pooling_modes}
+    accepted_sequence_units = {"segment", "segment_chain"}
+    if sequence_unit not in accepted_sequence_units:
+        raise ValueError(f"unsupported sequence_unit: {sequence_unit!r}")
+    if chain_length < 1:
+        raise ValueError(f"chain_length must be at least 1, got {chain_length}")
+    if chain_stride < 1:
+        raise ValueError(f"chain_stride must be at least 1, got {chain_stride}")
     resolved_genotype_pooling = genotype_pooling or pooling
     resolved_cohort_pooling = cohort_pooling or pooling
     axis_specific_pooling = genotype_pooling is not None or cohort_pooling is not None
@@ -147,6 +175,9 @@ def _build_module(
         def __init__(self) -> None:
             super().__init__()
             self.axis_specific_pooling = axis_specific_pooling
+            self.sequence_unit = sequence_unit
+            self.chain_length = chain_length
+            self.chain_stride = chain_stride
             self.segment_encoder = nn.Sequential(
                 nn.Conv1d(n_channels, conv_channels, kernel_size=5, padding=2),
                 nn.ReLU(),
@@ -160,6 +191,18 @@ def _build_module(
                 nn.ReLU(),
                 nn.Dropout(dropout),
             )
+            if sequence_unit == "segment_chain":
+                self.chain_encoder = nn.Sequential(
+                    nn.Conv1d(embedding_dim, embedding_dim, kernel_size=3, padding=1),
+                    nn.ReLU(),
+                    nn.AdaptiveAvgPool1d(1),
+                    nn.Flatten(),
+                    nn.Linear(embedding_dim, embedding_dim),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                )
+            else:
+                self.chain_encoder = None
             self.pooling = pooling
             self.genotype_pooling = resolved_genotype_pooling
             self.cohort_pooling = resolved_cohort_pooling
@@ -199,6 +242,20 @@ def _build_module(
         def encode_segments(self, segments):
             return self.projection(self.segment_encoder(segments))
 
+        def encode_chains(self, segment_embeddings):
+            n_segments = segment_embeddings.shape[0]
+            if n_segments <= self.chain_length:
+                chain_tensor = segment_embeddings.transpose(0, 1).unsqueeze(0)
+                return self.chain_encoder(chain_tensor)
+            chain_tensors = segment_embeddings.unfold(0, self.chain_length, self.chain_stride)
+            return self.chain_encoder(chain_tensors.contiguous())
+
+        def encode_units(self, segments):
+            segment_embeddings = self.encode_segments(segments)
+            if self.sequence_unit == "segment":
+                return segment_embeddings
+            return self.encode_chains(segment_embeddings)
+
         def pool_segments(self, segment_embeddings, pooling_name: str, attention):
             mean_embedding = segment_embeddings.mean(dim=0)
             if pooling_name == "mean":
@@ -218,16 +275,16 @@ def _build_module(
             return fusion(torch.cat([fly_embedding, side_features], dim=0))
 
         def forward_fly(self, segments, side_features=None):
-            segment_embeddings = self.encode_segments(segments)
+            unit_embeddings = self.encode_units(segments)
             if self.axis_specific_pooling:
                 genotype_embedding = self.pool_segments(
-                    segment_embeddings, self.genotype_pooling, self.genotype_attention
+                    unit_embeddings, self.genotype_pooling, self.genotype_attention
                 )
-                cohort_embedding = self.pool_segments(segment_embeddings, self.cohort_pooling, self.cohort_attention)
+                cohort_embedding = self.pool_segments(unit_embeddings, self.cohort_pooling, self.cohort_attention)
                 genotype_embedding = self._fuse_embedding(genotype_embedding, side_features, self.genotype_fusion)
                 cohort_embedding = self._fuse_embedding(cohort_embedding, side_features, self.cohort_fusion)
             else:
-                fly_embedding = self.pool_segments(segment_embeddings, self.pooling, self.attention)
+                fly_embedding = self.pool_segments(unit_embeddings, self.pooling, self.attention)
                 fly_embedding = self._fuse_embedding(fly_embedding, side_features, self.fusion)
                 genotype_embedding = fly_embedding
                 cohort_embedding = fly_embedding
@@ -268,9 +325,14 @@ def train_torch_sequence_meanpool(
     pooling = str(config.get("pooling", "mean"))
     genotype_pooling = str(config["genotype_pooling"]) if "genotype_pooling" in config else None
     cohort_pooling = str(config["cohort_pooling"]) if "cohort_pooling" in config else None
+    sequence_unit = str(config.get("sequence_unit", "segment"))
+    chain_length = int(config.get("chain_length", 1))
+    chain_stride = int(config.get("chain_stride", 1))
     attention_hidden_dim = int(config.get("attention_hidden_dim", embedding_dim))
     dropout = float(config.get("dropout", 0.1))
     cohort_loss_weight = float(config.get("cohort_loss_weight", 1.0))
+    progress_interval = int(config.get("progress_interval", 0))
+    progress_label = str(config.get("progress_label", "training"))
     train_max_segments_per_fly = _segment_cap_from_config(
         config,
         key="train_max_segments_per_fly",
@@ -316,6 +378,9 @@ def train_torch_sequence_meanpool(
         pooling=pooling,
         genotype_pooling=genotype_pooling,
         cohort_pooling=cohort_pooling,
+        sequence_unit=sequence_unit,
+        chain_length=chain_length,
+        chain_stride=chain_stride,
         attention_hidden_dim=attention_hidden_dim,
         n_genotype_classes=len(genotype_labels),
         n_cohort_classes=len(cohort_labels),
@@ -333,10 +398,14 @@ def train_torch_sequence_meanpool(
     rng = np.random.default_rng(random_seed + 1)
 
     module.train()
-    for _ in range(max_iter):
+    for epoch_idx in range(max_iter):
         optimizer.zero_grad()
+        total_loss = 0.0
         for example in examples:
-            indices = _random_sample_indices(example.segment_indices, train_max_segments_per_fly, rng)
+            if sequence_unit == "segment_chain":
+                indices = _random_contiguous_indices(example.segment_indices, train_max_segments_per_fly, rng)
+            else:
+                indices = _random_sample_indices(example.segment_indices, train_max_segments_per_fly, rng)
             segment_batch = torch.as_tensor(x_scaled[indices], dtype=torch.float32, device=device).permute(0, 2, 1)
             raw_side_input = _scaled_side_input(example, side_inputs, side_means, side_stds)
             side_tensor = (
@@ -347,8 +416,14 @@ def train_torch_sequence_meanpool(
             cohort_target = torch.tensor([cohort_to_index[example.cohort]], dtype=torch.long, device=device)
             loss = criterion(genotype_logits.unsqueeze(0), genotype_target)
             loss = loss + cohort_loss_weight * criterion(cohort_logits.unsqueeze(0), cohort_target)
+            total_loss += float(loss.detach().cpu())
             (loss / len(examples)).backward()
         optimizer.step()
+        if progress_interval > 0 and (
+            epoch_idx == 0 or (epoch_idx + 1) % progress_interval == 0 or epoch_idx + 1 == max_iter
+        ):
+            mean_loss = total_loss / len(examples)
+            print(f"{progress_label}: epoch {epoch_idx + 1}/{max_iter} loss={mean_loss:.4f}", flush=True)
 
     return {
         "model_kind": "sequence_conv1d_meanpool_torch_v1",
@@ -368,6 +443,9 @@ def train_torch_sequence_meanpool(
         "cohort_pooled_embedding_dim": cohort_pooled_embedding_dim,
         "fusion_hidden_dim": fusion_hidden_dim,
         "pooling": pooling,
+        "sequence_unit": sequence_unit,
+        "chain_length": chain_length,
+        "chain_stride": chain_stride,
         "attention_hidden_dim": attention_hidden_dim,
         "dropout": dropout,
         "side_feature_names": resolved_side_feature_names,
@@ -375,6 +453,7 @@ def train_torch_sequence_meanpool(
         "side_input_stds": side_stds,
         "n_side_features": len(resolved_side_feature_names),
         "cohort_loss_weight": cohort_loss_weight,
+        "progress_interval": progress_interval,
         "max_iter": max_iter,
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
@@ -383,7 +462,11 @@ def train_torch_sequence_meanpool(
         "train_max_segments_per_fly": 0 if train_max_segments_per_fly is None else train_max_segments_per_fly,
         "eval_max_segments_per_fly": 0 if eval_max_segments_per_fly is None else eval_max_segments_per_fly,
         "scaler_max_segments_per_fly": 0 if scaler_max_segments_per_fly is None else scaler_max_segments_per_fly,
-        "segment_sampling": "random_without_replacement_per_epoch",
+        "segment_sampling": (
+            "random_contiguous_span_per_epoch"
+            if sequence_unit == "segment_chain"
+            else "random_without_replacement_per_epoch"
+        ),
     }
 
 
@@ -411,12 +494,16 @@ def predict_torch_sequence_meanpool(
         side_means = np.zeros(0, dtype=np.float32)
         side_stds = np.ones(0, dtype=np.float32)
     max_segments_per_fly = int(model.get("eval_max_segments_per_fly", 0)) or None
+    sequence_unit = str(model.get("sequence_unit", "segment"))
     genotype_labels = [str(label) for label in model["genotype_labels"]]
     cohort_labels = [str(label) for label in model["cohort_labels"]]
     predictions: list[dict[str, object]] = []
     with torch.no_grad():
         for example in examples:
-            indices = _evenly_spaced_indices(example.segment_indices, max_segments_per_fly)
+            if sequence_unit == "segment_chain":
+                indices = _centered_contiguous_indices(example.segment_indices, max_segments_per_fly)
+            else:
+                indices = _evenly_spaced_indices(example.segment_indices, max_segments_per_fly)
             segment_batch = torch.as_tensor(x_scaled[indices], dtype=torch.float32, device=device).permute(0, 2, 1)
             raw_side_input = _scaled_side_input(example, side_inputs, side_means, side_stds)
             side_tensor = (

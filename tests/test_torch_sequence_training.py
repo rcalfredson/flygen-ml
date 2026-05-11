@@ -52,6 +52,33 @@ def _write_sequence_fixture(path):
     )
 
 
+def test_torch_segment_chain_encoder_batches_multiple_windows():
+    from flygen_ml.modeling.torch_sequence_models import _build_module
+
+    module = _build_module(
+        n_channels=2,
+        conv_channels=2,
+        embedding_dim=4,
+        n_side_features=0,
+        fusion_hidden_dim=5,
+        pooling="mean",
+        genotype_pooling=None,
+        cohort_pooling=None,
+        sequence_unit="segment_chain",
+        chain_length=2,
+        chain_stride=1,
+        attention_hidden_dim=3,
+        n_genotype_classes=2,
+        n_cohort_classes=2,
+        dropout=0.0,
+    )
+    segment_embeddings = torch.randn(4, 4)
+
+    chain_embeddings = module.encode_chains(segment_embeddings)
+
+    assert chain_embeddings.shape == (3, 4)
+
+
 def _write_feature_fixture(path):
     path.write_text(
         "\n".join(
@@ -302,3 +329,60 @@ def test_torch_sequence_cross_validation_supports_head_specific_pooling(tmp_path
     assert metrics["training"]["cohort_pooling"] == "mean_attention_concat"
     assert metrics["training"]["genotype_pooled_embedding_dim"] == 4
     assert metrics["training"]["cohort_pooled_embedding_dim"] == 8
+
+
+def test_torch_sequence_cross_validation_supports_segment_chain_units(tmp_path):
+    sequence_path = tmp_path / "sequences.npz"
+    features_path = tmp_path / "features.csv"
+    _write_sequence_fixture(sequence_path)
+    _write_feature_fixture(features_path)
+    config_path = tmp_path / "segment_chain_conv1d_headpool.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "model_name: segment_chain_conv1d_headpool_fused_v1",
+                "model_kind: sequence_conv1d_meanpool_torch_v1",
+                "split_label_key: genotype",
+                "random_seed: 3",
+                "conv_channels: 2",
+                "embedding_dim: 4",
+                "fusion_hidden_dim: 5",
+                "sequence_unit: segment_chain",
+                "chain_length: 2",
+                "chain_stride: 1",
+                "genotype_pooling: mean",
+                "cohort_pooling: mean_attention_concat",
+                "attention_hidden_dim: 3",
+                "dropout: 0.0",
+                "train_max_segments_per_fly: 2",
+                "eval_max_segments_per_fly: 0",
+                f"side_features_path: {features_path}",
+                "side_feature_names: path_length_px_mean,straightness_mean",
+                "learning_rate: 0.001",
+                "max_iter: 1",
+                "weight_decay: 0.0",
+                "progress_interval: 1",
+                "device: cpu",
+            ]
+        )
+    )
+    output_dir = tmp_path / "run"
+
+    metadata = train_and_save_sequence_cross_validation_run(
+        config_path=config_path,
+        sequence_path=sequence_path,
+        output_dir=output_dir,
+        n_splits=3,
+    )
+
+    assert metadata["sequence_unit"] == "segment_chain"
+    assert metadata["chain_length"] == 2
+    assert metadata["chain_stride"] == 1
+    assert metadata["segment_sampling"] == "random_contiguous_span_per_epoch"
+    assert metadata["progress_interval"] == 1
+    metrics = json.loads((output_dir / "cv_metrics_summary.json").read_text())
+    assert metrics["training"]["sequence_unit"] == "segment_chain"
+    assert metrics["training"]["chain_length"] == 2
+    assert metrics["training"]["chain_stride"] == 1
+    assert metrics["training"]["segment_sampling"] == "random_contiguous_span_per_epoch"
+    assert metrics["training"]["progress_interval"] == 1

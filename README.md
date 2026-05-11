@@ -294,6 +294,19 @@ python -m flygen_ml.cli.train_sequence_model \
   --seed 1
 ```
 
+To test short ordered chains of consecutive between-reward trajectories instead
+of pooling individual segment embeddings directly. The chain config prints
+fold/epoch progress every five epochs because these runs are heavier than the
+single-segment model:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_chain_conv1d_headpool_fused_wide.yaml \
+  --sequences artifacts/sequences_v1.npz \
+  --output runs/segment_chain_conv1d_headpool_fused_wide_v1_cv \
+  --cv-folds 5
+```
+
 ## Output Artifacts
 
 A standard holdout run writes:

@@ -250,12 +250,16 @@ def _model_training_summary(model: dict[str, object]) -> dict[str, object]:
         "cohort_pooled_embedding_dim": model.get("cohort_pooled_embedding_dim"),
         "fusion_hidden_dim": model.get("fusion_hidden_dim"),
         "pooling": model.get("pooling"),
+        "sequence_unit": model.get("sequence_unit"),
+        "chain_length": model.get("chain_length"),
+        "chain_stride": model.get("chain_stride"),
         "attention_hidden_dim": model.get("attention_hidden_dim"),
         "n_side_features": model.get("n_side_features"),
         "side_feature_names": model.get("side_feature_names"),
         "dropout": model.get("dropout"),
         "learning_rate": model.get("learning_rate"),
         "weight_decay": model.get("weight_decay"),
+        "progress_interval": model.get("progress_interval"),
         "max_iter": model.get("max_iter"),
         "device": model.get("device"),
         "random_seed": model.get("random_seed"),
@@ -371,11 +375,14 @@ def train_and_save_sequence_cross_validation_run(
     training_summary: dict[str, object] | None = None
     model_kind = "sequence_meanpool_mlp_numpy_v1"
     for fold_idx, (train_rows, valid_rows) in enumerate(folds):
+        fold_config = {**config, "random_seed": random_seed + fold_idx}
+        if int(config.get("progress_interval", 0)) > 0:
+            fold_config["progress_label"] = f"fold {fold_idx + 1}/{resolved_n_splits}"
         split_result = _train_and_evaluate(
             x,
             _rows_to_examples(train_rows, examples_by_fly),
             _rows_to_examples(valid_rows, examples_by_fly),
-            config={**config, "random_seed": random_seed + fold_idx},
+            config=fold_config,
             side_inputs=side_inputs,
             side_feature_names=side_feature_names,
         )
