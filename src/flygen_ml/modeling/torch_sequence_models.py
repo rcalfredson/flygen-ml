@@ -115,6 +115,8 @@ def _build_module(
     n_side_features: int,
     fusion_hidden_dim: int,
     pooling: str,
+    genotype_pooling: str | None,
+    cohort_pooling: str | None,
     attention_hidden_dim: int,
     n_genotype_classes: int,
     n_cohort_classes: int,
@@ -123,13 +125,28 @@ def _build_module(
     torch, nn = _import_torch()
     attention_pooling_modes = {"attention", "mean_attention_concat"}
     accepted_pooling_modes = {"mean", *attention_pooling_modes}
-    if pooling not in accepted_pooling_modes:
-        raise ValueError(f"unsupported pooling: {pooling!r}")
-    pooled_embedding_dim = embedding_dim * 2 if pooling == "mean_attention_concat" else embedding_dim
+    resolved_genotype_pooling = genotype_pooling or pooling
+    resolved_cohort_pooling = cohort_pooling or pooling
+    axis_specific_pooling = genotype_pooling is not None or cohort_pooling is not None
+
+    def _validate_pooling(pooling_name: str) -> None:
+        if pooling_name not in accepted_pooling_modes:
+            raise ValueError(f"unsupported pooling: {pooling_name!r}")
+
+    def _pooled_embedding_dim(pooling_name: str) -> int:
+        return embedding_dim * 2 if pooling_name == "mean_attention_concat" else embedding_dim
+
+    _validate_pooling(pooling)
+    _validate_pooling(resolved_genotype_pooling)
+    _validate_pooling(resolved_cohort_pooling)
+    pooled_embedding_dim = _pooled_embedding_dim(pooling)
+    genotype_pooled_embedding_dim = _pooled_embedding_dim(resolved_genotype_pooling)
+    cohort_pooled_embedding_dim = _pooled_embedding_dim(resolved_cohort_pooling)
 
     class SegmentConvMeanPool(nn.Module):
         def __init__(self) -> None:
             super().__init__()
+            self.axis_specific_pooling = axis_specific_pooling
             self.segment_encoder = nn.Sequential(
                 nn.Conv1d(n_channels, conv_channels, kernel_size=5, padding=2),
                 nn.ReLU(),
@@ -144,48 +161,77 @@ def _build_module(
                 nn.Dropout(dropout),
             )
             self.pooling = pooling
-            if pooling in attention_pooling_modes:
-                self.attention = nn.Sequential(
+            self.genotype_pooling = resolved_genotype_pooling
+            self.cohort_pooling = resolved_cohort_pooling
+            if self.axis_specific_pooling:
+                self.genotype_attention = self._make_attention(resolved_genotype_pooling)
+                self.cohort_attention = self._make_attention(resolved_cohort_pooling)
+                self.genotype_fusion = self._make_fusion(genotype_pooled_embedding_dim)
+                self.cohort_fusion = self._make_fusion(cohort_pooled_embedding_dim)
+                genotype_head_input_dim = fusion_hidden_dim if n_side_features > 0 else genotype_pooled_embedding_dim
+                cohort_head_input_dim = fusion_hidden_dim if n_side_features > 0 else cohort_pooled_embedding_dim
+            else:
+                self.attention = self._make_attention(pooling)
+                self.fusion = self._make_fusion(pooled_embedding_dim)
+                genotype_head_input_dim = fusion_hidden_dim if n_side_features > 0 else pooled_embedding_dim
+                cohort_head_input_dim = genotype_head_input_dim
+            self.genotype_head = nn.Linear(genotype_head_input_dim, n_genotype_classes)
+            self.cohort_head = nn.Linear(cohort_head_input_dim, n_cohort_classes)
+
+        def _make_attention(self, pooling_name: str):
+            if pooling_name not in attention_pooling_modes:
+                return None
+            return nn.Sequential(
                     nn.Linear(embedding_dim, attention_hidden_dim),
                     nn.Tanh(),
                     nn.Linear(attention_hidden_dim, 1),
                 )
-            else:
-                self.attention = None
-            if n_side_features > 0:
-                self.fusion = nn.Sequential(
-                    nn.Linear(pooled_embedding_dim + n_side_features, fusion_hidden_dim),
-                    nn.ReLU(),
-                    nn.Dropout(dropout),
-                )
-                head_input_dim = fusion_hidden_dim
-            else:
-                self.fusion = None
-                head_input_dim = pooled_embedding_dim
-            self.genotype_head = nn.Linear(head_input_dim, n_genotype_classes)
-            self.cohort_head = nn.Linear(head_input_dim, n_cohort_classes)
+
+        def _make_fusion(self, pooled_dim: int):
+            if n_side_features <= 0:
+                return None
+            return nn.Sequential(
+                nn.Linear(pooled_dim + n_side_features, fusion_hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            )
 
         def encode_segments(self, segments):
             return self.projection(self.segment_encoder(segments))
 
-        def pool_segments(self, segment_embeddings):
+        def pool_segments(self, segment_embeddings, pooling_name: str, attention):
             mean_embedding = segment_embeddings.mean(dim=0)
-            if self.pooling == "mean":
+            if pooling_name == "mean":
                 return mean_embedding
-            attention_logits = self.attention(segment_embeddings).squeeze(-1)
+            attention_logits = attention(segment_embeddings).squeeze(-1)
             attention_weights = torch.softmax(attention_logits, dim=0)
             attention_embedding = (segment_embeddings * attention_weights.unsqueeze(-1)).sum(dim=0)
-            if self.pooling == "attention":
+            if pooling_name == "attention":
                 return attention_embedding
             return torch.cat([mean_embedding, attention_embedding], dim=0)
 
+        def _fuse_embedding(self, fly_embedding, side_features, fusion):
+            if fusion is None:
+                return fly_embedding
+            if side_features is None:
+                raise ValueError("side_features are required for this fused sequence model")
+            return fusion(torch.cat([fly_embedding, side_features], dim=0))
+
         def forward_fly(self, segments, side_features=None):
-            fly_embedding = self.pool_segments(self.encode_segments(segments))
-            if self.fusion is not None:
-                if side_features is None:
-                    raise ValueError("side_features are required for this fused sequence model")
-                fly_embedding = self.fusion(torch.cat([fly_embedding, side_features], dim=0))
-            return self.genotype_head(fly_embedding), self.cohort_head(fly_embedding)
+            segment_embeddings = self.encode_segments(segments)
+            if self.axis_specific_pooling:
+                genotype_embedding = self.pool_segments(
+                    segment_embeddings, self.genotype_pooling, self.genotype_attention
+                )
+                cohort_embedding = self.pool_segments(segment_embeddings, self.cohort_pooling, self.cohort_attention)
+                genotype_embedding = self._fuse_embedding(genotype_embedding, side_features, self.genotype_fusion)
+                cohort_embedding = self._fuse_embedding(cohort_embedding, side_features, self.cohort_fusion)
+            else:
+                fly_embedding = self.pool_segments(segment_embeddings, self.pooling, self.attention)
+                fly_embedding = self._fuse_embedding(fly_embedding, side_features, self.fusion)
+                genotype_embedding = fly_embedding
+                cohort_embedding = fly_embedding
+            return self.genotype_head(genotype_embedding), self.cohort_head(cohort_embedding)
 
     return SegmentConvMeanPool()
 
@@ -220,6 +266,8 @@ def train_torch_sequence_meanpool(
     embedding_dim = int(config.get("embedding_dim", config.get("hidden_dim", 64)))
     fusion_hidden_dim = int(config.get("fusion_hidden_dim", embedding_dim))
     pooling = str(config.get("pooling", "mean"))
+    genotype_pooling = str(config["genotype_pooling"]) if "genotype_pooling" in config else None
+    cohort_pooling = str(config["cohort_pooling"]) if "cohort_pooling" in config else None
     attention_hidden_dim = int(config.get("attention_hidden_dim", embedding_dim))
     dropout = float(config.get("dropout", 0.1))
     cohort_loss_weight = float(config.get("cohort_loss_weight", 1.0))
@@ -266,12 +314,20 @@ def train_torch_sequence_meanpool(
         n_side_features=len(resolved_side_feature_names),
         fusion_hidden_dim=fusion_hidden_dim,
         pooling=pooling,
+        genotype_pooling=genotype_pooling,
+        cohort_pooling=cohort_pooling,
         attention_hidden_dim=attention_hidden_dim,
         n_genotype_classes=len(genotype_labels),
         n_cohort_classes=len(cohort_labels),
         dropout=dropout,
     ).to(device)
     pooled_embedding_dim = embedding_dim * 2 if pooling == "mean_attention_concat" else embedding_dim
+    genotype_pooled_embedding_dim = (
+        embedding_dim * 2 if (genotype_pooling or pooling) == "mean_attention_concat" else embedding_dim
+    )
+    cohort_pooled_embedding_dim = (
+        embedding_dim * 2 if (cohort_pooling or pooling) == "mean_attention_concat" else embedding_dim
+    )
     optimizer = torch.optim.Adam(module.parameters(), lr=learning_rate, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
     rng = np.random.default_rng(random_seed + 1)
@@ -306,6 +362,10 @@ def train_torch_sequence_meanpool(
         "conv_channels": conv_channels,
         "embedding_dim": embedding_dim,
         "pooled_embedding_dim": pooled_embedding_dim,
+        "genotype_pooling": genotype_pooling,
+        "cohort_pooling": cohort_pooling,
+        "genotype_pooled_embedding_dim": genotype_pooled_embedding_dim,
+        "cohort_pooled_embedding_dim": cohort_pooled_embedding_dim,
         "fusion_hidden_dim": fusion_hidden_dim,
         "pooling": pooling,
         "attention_hidden_dim": attention_hidden_dim,
