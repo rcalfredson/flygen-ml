@@ -318,6 +318,18 @@ python -m flygen_ml.cli.train_sequence_model \
   --cv-folds 5
 ```
 
+To run an ordered-segment GRU experiment, which encodes individual trajectories
+with the Conv1D segment encoder and then passes the ordered segment embeddings
+through a GRU before fly-level pooling:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_gru_conv1d_headpool_fused_wide_long.yaml \
+  --sequences artifacts/sequences_v1.npz \
+  --output runs/segment_gru_conv1d_headpool_fused_wide_long_v1_cv \
+  --cv-folds 5
+```
+
 ## Output Artifacts
 
 A standard holdout run writes:

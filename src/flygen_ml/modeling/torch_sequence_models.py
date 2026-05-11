@@ -187,6 +187,9 @@ def _build_module(
     sequence_unit: str,
     chain_length: int,
     chain_stride: int,
+    gru_hidden_dim: int,
+    gru_layers: int,
+    gru_bidirectional: bool,
     attention_hidden_dim: int,
     n_genotype_classes: int,
     n_cohort_classes: int,
@@ -195,13 +198,22 @@ def _build_module(
     torch, nn = _import_torch()
     attention_pooling_modes = {"attention", "mean_attention_concat"}
     accepted_pooling_modes = {"mean", *attention_pooling_modes}
-    accepted_sequence_units = {"segment", "segment_chain"}
+    accepted_sequence_units = {"segment", "segment_chain", "segment_gru"}
     if sequence_unit not in accepted_sequence_units:
         raise ValueError(f"unsupported sequence_unit: {sequence_unit!r}")
     if chain_length < 1:
         raise ValueError(f"chain_length must be at least 1, got {chain_length}")
     if chain_stride < 1:
         raise ValueError(f"chain_stride must be at least 1, got {chain_stride}")
+    if gru_hidden_dim < 1:
+        raise ValueError(f"gru_hidden_dim must be at least 1, got {gru_hidden_dim}")
+    if gru_layers < 1:
+        raise ValueError(f"gru_layers must be at least 1, got {gru_layers}")
+    unit_embedding_dim = (
+        gru_hidden_dim * (2 if gru_bidirectional else 1)
+        if sequence_unit == "segment_gru"
+        else embedding_dim
+    )
     resolved_genotype_pooling = genotype_pooling or pooling
     resolved_cohort_pooling = cohort_pooling or pooling
     axis_specific_pooling = genotype_pooling is not None or cohort_pooling is not None
@@ -211,7 +223,7 @@ def _build_module(
             raise ValueError(f"unsupported pooling: {pooling_name!r}")
 
     def _pooled_embedding_dim(pooling_name: str) -> int:
-        return embedding_dim * 2 if pooling_name == "mean_attention_concat" else embedding_dim
+        return unit_embedding_dim * 2 if pooling_name == "mean_attention_concat" else unit_embedding_dim
 
     _validate_pooling(pooling)
     _validate_pooling(resolved_genotype_pooling)
@@ -227,6 +239,9 @@ def _build_module(
             self.sequence_unit = sequence_unit
             self.chain_length = chain_length
             self.chain_stride = chain_stride
+            self.gru_hidden_dim = gru_hidden_dim
+            self.gru_layers = gru_layers
+            self.gru_bidirectional = gru_bidirectional
             self.segment_encoder = nn.Sequential(
                 nn.Conv1d(n_channels, conv_channels, kernel_size=5, padding=2),
                 nn.ReLU(),
@@ -252,6 +267,17 @@ def _build_module(
                 )
             else:
                 self.chain_encoder = None
+            if sequence_unit == "segment_gru":
+                self.gru_encoder = nn.GRU(
+                    input_size=embedding_dim,
+                    hidden_size=gru_hidden_dim,
+                    num_layers=gru_layers,
+                    dropout=dropout if gru_layers > 1 else 0.0,
+                    bidirectional=gru_bidirectional,
+                    batch_first=True,
+                )
+            else:
+                self.gru_encoder = None
             self.pooling = pooling
             self.genotype_pooling = resolved_genotype_pooling
             self.cohort_pooling = resolved_cohort_pooling
@@ -274,10 +300,10 @@ def _build_module(
             if pooling_name not in attention_pooling_modes:
                 return None
             return nn.Sequential(
-                    nn.Linear(embedding_dim, attention_hidden_dim),
-                    nn.Tanh(),
-                    nn.Linear(attention_hidden_dim, 1),
-                )
+                nn.Linear(unit_embedding_dim, attention_hidden_dim),
+                nn.Tanh(),
+                nn.Linear(attention_hidden_dim, 1),
+            )
 
         def _make_fusion(self, pooled_dim: int):
             if n_side_features <= 0:
@@ -299,10 +325,16 @@ def _build_module(
             chain_tensors = segment_embeddings.unfold(0, self.chain_length, self.chain_stride)
             return self.chain_encoder(chain_tensors.contiguous())
 
+        def encode_gru(self, segment_embeddings):
+            outputs, _ = self.gru_encoder(segment_embeddings.unsqueeze(0))
+            return outputs.squeeze(0)
+
         def encode_units(self, segments):
             segment_embeddings = self.encode_segments(segments)
             if self.sequence_unit == "segment":
                 return segment_embeddings
+            if self.sequence_unit == "segment_gru":
+                return self.encode_gru(segment_embeddings)
             return self.encode_chains(segment_embeddings)
 
         def pool_segments(self, segment_embeddings, pooling_name: str, attention):
@@ -360,7 +392,7 @@ def _module_predictions(
     predictions: list[dict[str, object]] = []
     with torch.no_grad():
         for example in examples:
-            if sequence_unit == "segment_chain":
+            if sequence_unit in {"segment_chain", "segment_gru"}:
                 indices = _centered_contiguous_indices(example.segment_indices, max_segments_per_fly)
             else:
                 indices = _evenly_spaced_indices(example.segment_indices, max_segments_per_fly)
@@ -427,6 +459,9 @@ def train_torch_sequence_meanpool(
     sequence_unit = str(config.get("sequence_unit", "segment"))
     chain_length = int(config.get("chain_length", 1))
     chain_stride = int(config.get("chain_stride", 1))
+    gru_hidden_dim = int(config.get("gru_hidden_dim", embedding_dim))
+    gru_layers = int(config.get("gru_layers", 1))
+    gru_bidirectional = str(config.get("gru_bidirectional", "false")).lower() in {"1", "true", "yes"}
     attention_hidden_dim = int(config.get("attention_hidden_dim", embedding_dim))
     dropout = float(config.get("dropout", 0.1))
     cohort_loss_weight = float(config.get("cohort_loss_weight", 1.0))
@@ -484,17 +519,25 @@ def train_torch_sequence_meanpool(
         sequence_unit=sequence_unit,
         chain_length=chain_length,
         chain_stride=chain_stride,
+        gru_hidden_dim=gru_hidden_dim,
+        gru_layers=gru_layers,
+        gru_bidirectional=gru_bidirectional,
         attention_hidden_dim=attention_hidden_dim,
         n_genotype_classes=len(genotype_labels),
         n_cohort_classes=len(cohort_labels),
         dropout=dropout,
     ).to(device)
-    pooled_embedding_dim = embedding_dim * 2 if pooling == "mean_attention_concat" else embedding_dim
+    unit_embedding_dim = (
+        gru_hidden_dim * (2 if gru_bidirectional else 1)
+        if sequence_unit == "segment_gru"
+        else embedding_dim
+    )
+    pooled_embedding_dim = unit_embedding_dim * 2 if pooling == "mean_attention_concat" else unit_embedding_dim
     genotype_pooled_embedding_dim = (
-        embedding_dim * 2 if (genotype_pooling or pooling) == "mean_attention_concat" else embedding_dim
+        unit_embedding_dim * 2 if (genotype_pooling or pooling) == "mean_attention_concat" else unit_embedding_dim
     )
     cohort_pooled_embedding_dim = (
-        embedding_dim * 2 if (cohort_pooling or pooling) == "mean_attention_concat" else embedding_dim
+        unit_embedding_dim * 2 if (cohort_pooling or pooling) == "mean_attention_concat" else unit_embedding_dim
     )
     optimizer = torch.optim.Adam(module.parameters(), lr=learning_rate, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
@@ -510,7 +553,7 @@ def train_torch_sequence_meanpool(
         optimizer.zero_grad()
         total_loss = 0.0
         for example in examples:
-            if sequence_unit == "segment_chain":
+            if sequence_unit in {"segment_chain", "segment_gru"}:
                 indices = _random_contiguous_indices(example.segment_indices, train_max_segments_per_fly, rng)
             else:
                 indices = _random_sample_indices(example.segment_indices, train_max_segments_per_fly, rng)
@@ -626,6 +669,9 @@ def train_torch_sequence_meanpool(
         "sequence_unit": sequence_unit,
         "chain_length": chain_length,
         "chain_stride": chain_stride,
+        "gru_hidden_dim": gru_hidden_dim,
+        "gru_layers": gru_layers,
+        "gru_bidirectional": gru_bidirectional,
         "attention_hidden_dim": attention_hidden_dim,
         "dropout": dropout,
         "side_feature_names": resolved_side_feature_names,
@@ -651,7 +697,7 @@ def train_torch_sequence_meanpool(
         "scaler_max_segments_per_fly": 0 if scaler_max_segments_per_fly is None else scaler_max_segments_per_fly,
         "segment_sampling": (
             "random_contiguous_span_per_epoch"
-            if sequence_unit == "segment_chain"
+            if sequence_unit in {"segment_chain", "segment_gru"}
             else "random_without_replacement_per_epoch"
         ),
     }
