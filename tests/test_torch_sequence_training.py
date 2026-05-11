@@ -362,6 +362,9 @@ def test_torch_sequence_cross_validation_supports_segment_chain_units(tmp_path):
                 "max_iter: 1",
                 "weight_decay: 0.0",
                 "progress_interval: 1",
+                "validation_interval: 1",
+                "select_best_epoch: true",
+                "validation_monitor_metric: joint_accuracy",
                 "device: cpu",
             ]
         )
@@ -380,9 +383,17 @@ def test_torch_sequence_cross_validation_supports_segment_chain_units(tmp_path):
     assert metadata["chain_stride"] == 1
     assert metadata["segment_sampling"] == "random_contiguous_span_per_epoch"
     assert metadata["progress_interval"] == 1
+    assert metadata["validation_interval"] == 1
+    assert metadata["select_best_epoch"] is True
+    assert metadata["best_epoch"] == 1
     metrics = json.loads((output_dir / "cv_metrics_summary.json").read_text())
     assert metrics["training"]["sequence_unit"] == "segment_chain"
     assert metrics["training"]["chain_length"] == 2
     assert metrics["training"]["chain_stride"] == 1
     assert metrics["training"]["segment_sampling"] == "random_contiguous_span_per_epoch"
     assert metrics["training"]["progress_interval"] == 1
+    assert metrics["training"]["validation_interval"] == 1
+    assert metrics["training"]["select_best_epoch"] is True
+    assert metrics["training"]["best_epoch"] == 1
+    assert metrics["folds"][0]["training"]["best_epoch"] == 1
+    assert metrics["folds"][0]["training"]["validation_history"][0]["epoch"] == 1

@@ -209,6 +209,7 @@ def _train_and_evaluate(
             config=config,
             side_inputs=side_inputs,
             side_feature_names=side_feature_names,
+            validation_examples=valid_examples,
         )
         train_predictions = predict_torch_sequence_meanpool(
             x,
@@ -260,6 +261,13 @@ def _model_training_summary(model: dict[str, object]) -> dict[str, object]:
         "learning_rate": model.get("learning_rate"),
         "weight_decay": model.get("weight_decay"),
         "progress_interval": model.get("progress_interval"),
+        "validation_interval": model.get("validation_interval"),
+        "validation_monitor_metric": model.get("validation_monitor_metric"),
+        "select_best_epoch": model.get("select_best_epoch"),
+        "best_epoch": model.get("best_epoch"),
+        "best_validation_metric": model.get("best_validation_metric"),
+        "validation_history": model.get("validation_history"),
+        "early_stopping_patience": model.get("early_stopping_patience"),
         "max_iter": model.get("max_iter"),
         "device": model.get("device"),
         "random_seed": model.get("random_seed"),
@@ -391,6 +399,7 @@ def train_and_save_sequence_cross_validation_run(
         fold_summaries.append(
             {
                 "fold": fold_idx,
+                "training": training_summary,
                 "train": split_result["train_metrics"],
                 "valid": split_result["valid_metrics"],
                 "train_flies": len(train_rows),
