@@ -6,8 +6,8 @@ other manifest metadata.
 
 The current pipeline focuses on between-reward trajectories from paired `.data`
 and `.trx` files. It extracts canonical trajectory segments, builds engineered
-movement features, aggregates those features to the fly level, and trains a
-simple baseline classifier with grouped evaluation.
+movement features, exports low-level trajectory tensors, and trains fly-level
+classifiers with grouped evaluation.
 
 The package is organized as a self-contained pipeline for this task: it reads
 paired `.data` and `.trx` recording files, extracts trajectory segments, builds
@@ -36,18 +36,35 @@ For the expected input contract, see
 
 ## Current Scope
 
-The main supported path is a fly-level logistic-regression baseline:
+The project supports two complementary modeling paths:
 
-- input: manifest rows pointing at paired `.data` / `.trx` recordings
-- segmentation: canonical between-reward trajectory intervals
-- features: engineered per-segment movement summaries aggregated per fly
-- model: NumPy logistic regression / softmax regression baseline
-- evaluation: grouped train/validation split or grouped K-fold CV
-- target label: configurable with `label_key`, defaulting to `genotype`
+- engineered fly-level baselines: per-segment movement summaries aggregated per
+  fly, then classified with NumPy logistic regression / softmax regression
+- sequence models: fixed-length, reward-normalized trajectory tensors encoded at
+  the segment level, aggregated at the fly level, and classified with dual
+  genotype/cohort output heads
 
-The first target was genotype classification. The modeling path now also supports
-other manifest columns, for example `cohort` for antennae-intact vs
-antennae-removed classification.
+The first target was genotype classification. The modeling path now also
+supports `cohort` for antennae-intact vs antennae-removed classification, and the
+strongest sequence models predict both axes jointly.
+
+The current strongest model family is GRU-128 over ordered Conv1D segment
+embeddings, with head-specific fly-level pooling and behavior-derived side
+features. Across grouped CV seed sweeps, the current results are:
+
+| trajectory evidence | model | joint | genotype | genotype bal | cohort | cohort bal |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Training 2 only | engineered logreg | 0.664 | 0.738 | 0.724 | 0.900 | 0.897 |
+| Training 2 only | GRU-128 | 0.764 | 0.788 | 0.779 | 0.948 | 0.949 |
+| Training 1 only | engineered logreg | 0.659 | 0.794 | 0.783 | 0.857 | 0.854 |
+| Training 1 only | GRU-128 | **0.809** | **0.861** | **0.856** | 0.929 | 0.928 |
+| Training 1 + Training 2 | engineered logreg | 0.677 | 0.774 | 0.757 | 0.882 | 0.881 |
+| Training 1 + Training 2 | GRU-128 | 0.803 | 0.833 | 0.827 | **0.954** | **0.954** |
+
+Training 1-only is currently strongest for genotype and joint classification.
+Combined Training 1 + Training 2 evidence is currently strongest for
+antenna-condition/cohort classification. In all tested regimes, GRU-128
+outperforms the engineered logistic-regression baseline.
 
 ## Installation
 
@@ -93,6 +110,15 @@ python -m flygen_ml.cli.build_manifest_from_globs \
   --repeat-fly-indices 0,1
 ```
 
+For Training 1 runs, use the Training 1 glob spec and a separate manifest path:
+
+```bash
+python -m flygen_ml.cli.build_manifest_from_globs \
+  --spec configs/manifest_globs/yang_2025_antennae_kir_t1.csv \
+  --output artifacts/manifest_t1.csv \
+  --repeat-fly-indices 0,1
+```
+
 Expected manifest columns include:
 
 - `sample_key`
@@ -114,6 +140,15 @@ python -m flygen_ml.cli.extract_segments \
   --output artifacts/segments_with_cohort.csv
 ```
 
+For Training 1:
+
+```bash
+python -m flygen_ml.cli.extract_segments \
+  --config configs/dataset/v1_binary.yaml \
+  --manifest artifacts/manifest_t1.csv \
+  --output artifacts/segments_t1_with_cohort.csv
+```
+
 The segment table keeps source provenance and frame boundaries so raw trajectory
 slices can be recovered later. It also carries manifest metadata such as
 `genotype` and `cohort`.
@@ -125,6 +160,15 @@ python -m flygen_ml.cli.build_features \
   --feature-set engineered_v1 \
   --segments artifacts/segments_with_cohort.csv \
   --output artifacts/features_antennae_no_training_end.csv
+```
+
+For Training 1:
+
+```bash
+python -m flygen_ml.cli.build_features \
+  --feature-set engineered_v1 \
+  --segments artifacts/segments_t1_with_cohort.csv \
+  --output artifacts/features_t1_antennae_no_training_end.csv
 ```
 
 By default, feature building omits segments that ended only because the selected
@@ -141,6 +185,11 @@ python -m flygen_ml.cli.build_features \
 The feature table is one row per fly. Metadata columns such as `genotype`,
 `cohort`, `chamber_type`, and `training_idx` are preserved for grouping and
 labeling, but are excluded from numeric model features.
+
+The combined Training 1 + Training 2 feature table used in the current
+experiments is one row per fly in `artifacts/features_t1_t2_antennae_no_training_end.csv`.
+It should be built by combining the T1 and T2 fly-level feature rows into a
+single fly-level row, not by treating T1 and T2 as independent labeled examples.
 
 ### 4. Train A Genotype Classifier
 
@@ -229,9 +278,22 @@ python -m flygen_ml.cli.export_sequence_tensors \
   --target-length 128
 ```
 
+For Training 1:
+
+```bash
+python -m flygen_ml.cli.export_sequence_tensors \
+  --segments artifacts/segments_t1_with_cohort.csv \
+  --output artifacts/sequences_t1_v1.npz \
+  --target-length 128
+```
+
 The default channels are `x_rel`, `y_rel`, `dx_rel`, `dy_rel`, `speed_rel`, and
 `r_rel`, where positions are centered on the reward location and scaled by the
 reward radius.
+
+The combined Training 1 + Training 2 sequence artifact used in the current
+experiments is `artifacts/sequences_t1_t2_v1.npz`. It combines existing T1 and
+T2 segment tensors while preserving a single fly-level prediction unit.
 
 To export a richer per-timestep motion representation, use `--channel-set rich`.
 This keeps the same fly-level training path but adds channels for acceleration,
@@ -342,6 +404,39 @@ python -m flygen_ml.cli.train_sequence_model \
   --cv-folds 5
 ```
 
+The current GRU-128 configs use the same ordered-segment architecture with a
+larger recurrent hidden state. Training 1-only is the strongest current setup
+for genotype and joint accuracy:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_gru128_t1_conv1d_headpool_fused_wide_long.yaml \
+  --sequences artifacts/sequences_t1_v1.npz \
+  --output runs/segment_gru128_t1_conv1d_headpool_fused_wide_long_v1_cv \
+  --cv-folds 5
+```
+
+Combined Training 1 + Training 2 is the strongest current setup for cohort:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_gru128_t1_t2_conv1d_headpool_fused_wide_long.yaml \
+  --sequences artifacts/sequences_t1_t2_v1.npz \
+  --output runs/segment_gru128_t1_t2_conv1d_headpool_fused_wide_long_v1_cv \
+  --cv-folds 5
+```
+
+To repeat seed sweeps without creating seed-specific config files:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_gru128_t1_conv1d_headpool_fused_wide_long.yaml \
+  --sequences artifacts/sequences_t1_v1.npz \
+  --output runs/segment_gru128_t1_conv1d_headpool_fused_wide_long_v1_seed1_cv \
+  --cv-folds 5 \
+  --seed 1
+```
+
 ## Output Artifacts
 
 A standard holdout run writes:
@@ -369,6 +464,25 @@ Cross-validation writes:
 - `cv_metrics_summary.json`
 - `cv_predictions.csv`
 - `run_metadata.json`
+
+Sequence CV runs can be summarized one at a time:
+
+```bash
+python -m flygen_ml.cli.evaluate_sequence_model \
+  --run-dir runs/segment_gru128_t1_conv1d_headpool_fused_wide_long_v1_cv
+```
+
+To summarize repeated sequence CV runs across seeds:
+
+```bash
+python -m flygen_ml.cli.summarize_sequence_runs \
+  --run-dir runs/segment_gru128_t1_conv1d_headpool_fused_wide_long_v1_cv \
+  --run-dir runs/segment_gru128_t1_conv1d_headpool_fused_wide_long_v1_seed1_cv \
+  --run-dir runs/segment_gru128_t1_conv1d_headpool_fused_wide_long_v1_seed2_cv \
+  --run-dir runs/segment_gru128_t1_conv1d_headpool_fused_wide_long_v1_seed3_cv
+```
+
+Use `--output-json` to save the across-seed summary as JSON.
 
 Evaluate whether two independently trained fly-level classifiers jointly
 identify each fly:
@@ -439,6 +553,29 @@ python -m flygen_ml.cli.export_prediction_segments \
 This creates a plotting-ready segment table with prediction metadata prepended to
 each segment row.
 
+Compare the error sets from two saved prediction runs:
+
+```bash
+python -m flygen_ml.cli.compare_prediction_errors \
+  --run-a runs/logreg_v1_movement_only_genotype_cv \
+  --run-b runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_cv \
+  --axis genotype \
+  --run-a-name logreg \
+  --run-b-name gru128 \
+  --join-without-fold \
+  --output runs/error_analysis/logreg_vs_gru128_genotype.csv
+```
+
+Summarize correctness buckets after an error comparison:
+
+```bash
+python -m flygen_ml.cli.inspect_error_buckets \
+  --comparison runs/error_analysis/logreg_vs_gru128_genotype.csv \
+  --features artifacts/features_antennae_no_training_end.csv \
+  --output runs/error_analysis/logreg_vs_gru128_genotype_summary.json \
+  --examples-output runs/error_analysis/logreg_vs_gru128_genotype_examples.csv
+```
+
 ## Modeling Notes
 
 The baseline model automatically ignores known metadata columns, including
@@ -456,6 +593,22 @@ other possible nuisance structure. For stronger claims, inspect those covariates
 and prefer grouped cross-validation or stricter grouping strategies where
 appropriate.
 
+Sequence models also protect evaluation at the fly level: per-segment
+trajectories are evidence for a fly-level label, not independent labeled
+examples. During training, configs such as `train_max_segments_per_fly: 200`
+randomly sample segment evidence per fly each epoch when a fly has more than the
+cap. During evaluation, `eval_max_segments_per_fly: 0` means use all available
+segments for each fly.
+
+Current interpretation notes:
+
+- Training 1-only GRU-128 is strongest for genotype and joint accuracy.
+- Training 1 + Training 2 GRU-128 is strongest for cohort accuracy.
+- Adding more trajectory evidence does not automatically help every label axis;
+  T1 and T2 appear to emphasize different behavioral signals.
+- The preferred next inputs remain behavior-derived trajectory context features,
+  rather than shortcut metadata used only to maximize classification.
+
 ## Development
 
 Run tests from the repository root:
@@ -472,6 +625,13 @@ python -m flygen_ml.cli.extract_segments --help
 python -m flygen_ml.cli.build_features --help
 python -m flygen_ml.cli.train_model --help
 python -m flygen_ml.cli.evaluate_model --help
+python -m flygen_ml.cli.export_sequence_tensors --help
+python -m flygen_ml.cli.train_sequence_model --help
+python -m flygen_ml.cli.evaluate_sequence_model --help
+python -m flygen_ml.cli.summarize_sequence_runs --help
+python -m flygen_ml.cli.evaluate_joint_predictions --help
+python -m flygen_ml.cli.compare_prediction_errors --help
+python -m flygen_ml.cli.inspect_error_buckets --help
 python -m flygen_ml.cli.inspect_segments --help
 python -m flygen_ml.cli.inspect_misclassifications --help
 python -m flygen_ml.cli.inspect_predictions --help
