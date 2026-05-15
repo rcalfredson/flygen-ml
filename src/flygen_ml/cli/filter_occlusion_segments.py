@@ -10,6 +10,7 @@ from pathlib import Path
 SINGLE_DEFICIENCY_LABELS = {
     "pfn-intact": ("PFN>Kir", "antennae-intact"),
     "control-removed": ("Control>Kir", "antennae-removed"),
+    "control-intact": ("Control>Kir", "antennae-intact"),
 }
 
 
