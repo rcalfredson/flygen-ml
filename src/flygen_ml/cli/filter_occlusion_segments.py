@@ -40,15 +40,25 @@ def _filter_deficiency_rows(
     *,
     deficiency: str,
     status: str,
+    require_correct: str,
 ) -> list[dict[str, str]]:
     genotype, cohort = SINGLE_DEFICIENCY_LABELS[deficiency]
-    return [
-        row
-        for row in rows
-        if row.get("actual_genotype") == genotype
-        and row.get("actual_cohort") == cohort
-        and row.get("occlusion_status", "ok") == status
-    ]
+    filtered: list[dict[str, str]] = []
+    for row in rows:
+        if row.get("actual_genotype") != genotype or row.get("actual_cohort") != cohort:
+            continue
+        if row.get("occlusion_status", "ok") != status:
+            continue
+        genotype_correct = row.get("actual_genotype", "") == row.get("predicted_genotype", "")
+        cohort_correct = row.get("actual_cohort", "") == row.get("predicted_cohort", "")
+        if require_correct == "genotype" and not genotype_correct:
+            continue
+        if require_correct == "cohort" and not cohort_correct:
+            continue
+        if require_correct == "joint" and not (genotype_correct and cohort_correct):
+            continue
+        filtered.append(row)
+    return filtered
 
 
 def _split_signed_delta_rows(
@@ -140,6 +150,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=None, help="Optional maximum rows per signed output table.")
     parser.add_argument("--status", default="ok", help="Occlusion status to keep.")
+    parser.add_argument(
+        "--require-correct",
+        choices=("none", "genotype", "cohort", "joint"),
+        default="none",
+        help="Keep only flies whose baseline prediction is correct for the selected head or joint label.",
+    )
     return parser
 
 
@@ -155,6 +171,7 @@ def main() -> int:
         rows,
         deficiency=args.deficiency,
         status=args.status,
+        require_correct=args.require_correct,
     )
     positive_rows, negative_rows = _split_signed_delta_rows(deficiency_rows, delta_column=delta_column)
     positive_ranked = _rank_rows(
