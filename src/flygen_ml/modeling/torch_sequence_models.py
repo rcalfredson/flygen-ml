@@ -174,6 +174,12 @@ def _resolve_device(torch: Any, config: dict[str, object]):
     return device
 
 
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() in {"1", "true", "yes"}
+
+
 def _build_module(
     *,
     n_channels: int,
@@ -423,6 +429,295 @@ def _module_predictions(
     return predictions
 
 
+def _selected_eval_indices(
+    example: FlySequenceExample,
+    *,
+    max_segments_per_fly: int | None,
+    sequence_unit: str,
+) -> np.ndarray:
+    if sequence_unit in {"segment_chain", "segment_gru"}:
+        return _centered_contiguous_indices(example.segment_indices, max_segments_per_fly)
+    return _evenly_spaced_indices(example.segment_indices, max_segments_per_fly)
+
+
+def _fly_logits_and_probs(
+    *,
+    torch: Any,
+    module,
+    x_scaled: np.ndarray,
+    indices: np.ndarray,
+    side_tensor,
+    genotype_labels: list[str],
+    cohort_labels: list[str],
+    device,
+) -> dict[str, object]:
+    segment_batch = torch.as_tensor(x_scaled[indices], dtype=torch.float32, device=device).permute(0, 2, 1)
+    genotype_logits_tensor, cohort_logits_tensor = module.forward_fly(segment_batch, side_tensor)
+    genotype_probs_tensor = torch.softmax(genotype_logits_tensor, dim=0)
+    cohort_probs_tensor = torch.softmax(cohort_logits_tensor, dim=0)
+    genotype_logits = genotype_logits_tensor.detach().cpu().numpy()
+    cohort_logits = cohort_logits_tensor.detach().cpu().numpy()
+    genotype_probs = genotype_probs_tensor.detach().cpu().numpy()
+    cohort_probs = cohort_probs_tensor.detach().cpu().numpy()
+    genotype_idx = int(genotype_probs.argmax())
+    cohort_idx = int(cohort_probs.argmax())
+    return {
+        "genotype_logits": genotype_logits,
+        "cohort_logits": cohort_logits,
+        "genotype_probs": genotype_probs,
+        "cohort_probs": cohort_probs,
+        "predicted_genotype": genotype_labels[genotype_idx],
+        "predicted_cohort": cohort_labels[cohort_idx],
+        "predicted_genotype_index": genotype_idx,
+        "predicted_cohort_index": cohort_idx,
+    }
+
+
+def load_torch_sequence_model_artifact(model: dict[str, object], *, device: str | None = None) -> dict[str, object]:
+    if str(model.get("model_kind")) != "sequence_conv1d_meanpool_torch_v1":
+        raise ValueError(f"unsupported torch sequence model artifact kind: {model.get('model_kind')!r}")
+    torch, _ = _import_torch()
+    resolved_device = torch.device(device or str(model.get("device", "cpu")))
+    if resolved_device.type == "cuda" and not torch.cuda.is_available():
+        resolved_device = torch.device("cpu")
+    genotype_labels = [str(label) for label in model["genotype_labels"]]
+    cohort_labels = [str(label) for label in model["cohort_labels"]]
+    module = _build_module(
+        n_channels=int(model["n_channels"]),
+        conv_channels=int(model["conv_channels"]),
+        embedding_dim=int(model["embedding_dim"]),
+        n_side_features=int(model.get("n_side_features", 0)),
+        fusion_hidden_dim=int(model.get("fusion_hidden_dim", model["embedding_dim"])),
+        pooling=str(model.get("pooling", "mean")),
+        genotype_pooling=str(model["genotype_pooling"]) if model.get("genotype_pooling") is not None else None,
+        cohort_pooling=str(model["cohort_pooling"]) if model.get("cohort_pooling") is not None else None,
+        sequence_unit=str(model.get("sequence_unit", "segment")),
+        chain_length=int(model.get("chain_length", 1)),
+        chain_stride=int(model.get("chain_stride", 1)),
+        gru_hidden_dim=int(model.get("gru_hidden_dim", model["embedding_dim"])),
+        gru_layers=int(model.get("gru_layers", 1)),
+        gru_bidirectional=_as_bool(model.get("gru_bidirectional", False)),
+        attention_hidden_dim=int(model.get("attention_hidden_dim", model["embedding_dim"])),
+        n_genotype_classes=len(genotype_labels),
+        n_cohort_classes=len(cohort_labels),
+        dropout=float(model.get("dropout", 0.0)),
+    ).to(resolved_device)
+    state_dict = {
+        key: torch.as_tensor(value, dtype=torch.float32, device=resolved_device)
+        for key, value in dict(model["state_dict"]).items()
+    }
+    module.load_state_dict(state_dict)
+    module.eval()
+    loaded = dict(model)
+    loaded["module"] = module
+    loaded["device"] = str(resolved_device)
+    return loaded
+
+
+def explain_torch_sequence_segment_occlusion(
+    x: np.ndarray,
+    examples: list[FlySequenceExample],
+    *,
+    model: dict[str, object],
+    side_inputs: dict[str, np.ndarray] | None = None,
+) -> list[dict[str, object]]:
+    torch, _ = _import_torch()
+    module = model["module"]
+    device = torch.device(str(model.get("device", "cpu")))
+    module.eval()
+    means = np.asarray(model["input_means"], dtype=np.float32)
+    stds = np.asarray(model["input_stds"], dtype=np.float32)
+    x_scaled = _scaled_sequences(x, means, stds)
+    side_feature_names = [str(name) for name in model.get("side_feature_names", [])]
+    if side_feature_names:
+        if side_inputs is None:
+            raise ValueError("side_inputs are required to explain this fused sequence model")
+        side_means = np.asarray(model["side_input_means"], dtype=np.float32)
+        side_stds = np.asarray(model["side_input_stds"], dtype=np.float32)
+    else:
+        side_means = np.zeros(0, dtype=np.float32)
+        side_stds = np.ones(0, dtype=np.float32)
+    max_segments_per_fly = int(model.get("eval_max_segments_per_fly", 0)) or None
+    sequence_unit = str(model.get("sequence_unit", "segment"))
+    genotype_labels = [str(label) for label in model["genotype_labels"]]
+    cohort_labels = [str(label) for label in model["cohort_labels"]]
+    genotype_to_index = {label: idx for idx, label in enumerate(genotype_labels)}
+    cohort_to_index = {label: idx for idx, label in enumerate(cohort_labels)}
+    rows: list[dict[str, object]] = []
+    with torch.no_grad():
+        for example in examples:
+            selected_indices = _selected_eval_indices(
+                example,
+                max_segments_per_fly=max_segments_per_fly,
+                sequence_unit=sequence_unit,
+            )
+            raw_side_input = _scaled_side_input(example, side_inputs, side_means, side_stds)
+            side_tensor = (
+                None if raw_side_input is None else torch.as_tensor(raw_side_input, dtype=torch.float32, device=device)
+            )
+            baseline = _fly_logits_and_probs(
+                torch=torch,
+                module=module,
+                x_scaled=x_scaled,
+                indices=selected_indices,
+                side_tensor=side_tensor,
+                genotype_labels=genotype_labels,
+                cohort_labels=cohort_labels,
+                device=device,
+            )
+            predicted_genotype_idx = int(baseline["predicted_genotype_index"])
+            predicted_cohort_idx = int(baseline["predicted_cohort_index"])
+            actual_genotype_idx = genotype_to_index[example.genotype]
+            actual_cohort_idx = cohort_to_index[example.cohort]
+            if len(selected_indices) <= 1:
+                for segment_index in selected_indices:
+                    rows.append(
+                        _occlusion_row(
+                            example=example,
+                            segment_index=int(segment_index),
+                            status="skipped_single_segment",
+                            baseline=baseline,
+                            occluded=None,
+                            n_eval_segments=len(selected_indices),
+                            predicted_genotype_idx=predicted_genotype_idx,
+                            predicted_cohort_idx=predicted_cohort_idx,
+                            actual_genotype_idx=actual_genotype_idx,
+                            actual_cohort_idx=actual_cohort_idx,
+                        )
+                    )
+                continue
+            for position, segment_index in enumerate(selected_indices):
+                occluded_indices = np.delete(selected_indices, position)
+                occluded = _fly_logits_and_probs(
+                    torch=torch,
+                    module=module,
+                    x_scaled=x_scaled,
+                    indices=occluded_indices,
+                    side_tensor=side_tensor,
+                    genotype_labels=genotype_labels,
+                    cohort_labels=cohort_labels,
+                    device=device,
+                )
+                rows.append(
+                    _occlusion_row(
+                        example=example,
+                        segment_index=int(segment_index),
+                        status="ok",
+                        baseline=baseline,
+                        occluded=occluded,
+                        n_eval_segments=len(selected_indices),
+                        predicted_genotype_idx=predicted_genotype_idx,
+                        predicted_cohort_idx=predicted_cohort_idx,
+                        actual_genotype_idx=actual_genotype_idx,
+                        actual_cohort_idx=actual_cohort_idx,
+                    )
+                )
+    return rows
+
+
+def _delta_or_nan(baseline: np.ndarray, occluded: np.ndarray | None, idx: int) -> float:
+    if occluded is None:
+        return float("nan")
+    return float(baseline[idx] - occluded[idx])
+
+
+def _value_or_nan(values: np.ndarray | None, idx: int) -> float:
+    if values is None:
+        return float("nan")
+    return float(values[idx])
+
+
+def _occlusion_row(
+    *,
+    example: FlySequenceExample,
+    segment_index: int,
+    status: str,
+    baseline: dict[str, object],
+    occluded: dict[str, object] | None,
+    n_eval_segments: int,
+    predicted_genotype_idx: int,
+    predicted_cohort_idx: int,
+    actual_genotype_idx: int,
+    actual_cohort_idx: int,
+) -> dict[str, object]:
+    baseline_genotype_probs = np.asarray(baseline["genotype_probs"], dtype=np.float32)
+    baseline_cohort_probs = np.asarray(baseline["cohort_probs"], dtype=np.float32)
+    baseline_genotype_logits = np.asarray(baseline["genotype_logits"], dtype=np.float32)
+    baseline_cohort_logits = np.asarray(baseline["cohort_logits"], dtype=np.float32)
+    occluded_genotype_probs = None if occluded is None else np.asarray(occluded["genotype_probs"], dtype=np.float32)
+    occluded_cohort_probs = None if occluded is None else np.asarray(occluded["cohort_probs"], dtype=np.float32)
+    occluded_genotype_logits = None if occluded is None else np.asarray(occluded["genotype_logits"], dtype=np.float32)
+    occluded_cohort_logits = None if occluded is None else np.asarray(occluded["cohort_logits"], dtype=np.float32)
+    return {
+        "fly_id": example.fly_id,
+        "sample_key": example.sample_key,
+        "segment_index": segment_index,
+        "actual_genotype": example.genotype,
+        "predicted_genotype": baseline["predicted_genotype"],
+        "occluded_predicted_genotype": "" if occluded is None else occluded["predicted_genotype"],
+        "genotype_prediction_changed": (
+            "" if occluded is None else baseline["predicted_genotype"] != occluded["predicted_genotype"]
+        ),
+        "actual_cohort": example.cohort,
+        "predicted_cohort": baseline["predicted_cohort"],
+        "occluded_predicted_cohort": "" if occluded is None else occluded["predicted_cohort"],
+        "cohort_prediction_changed": (
+            "" if occluded is None else baseline["predicted_cohort"] != occluded["predicted_cohort"]
+        ),
+        "joint_prediction_changed": (
+            ""
+            if occluded is None
+            else baseline["predicted_genotype"] != occluded["predicted_genotype"]
+            or baseline["predicted_cohort"] != occluded["predicted_cohort"]
+        ),
+        "occlusion_status": status,
+        "n_segments": example.n_segments,
+        "n_eval_segments": n_eval_segments,
+        "baseline_predicted_genotype_probability": float(baseline_genotype_probs[predicted_genotype_idx]),
+        "occluded_predicted_genotype_probability": _value_or_nan(
+            occluded_genotype_probs, predicted_genotype_idx
+        ),
+        "predicted_genotype_probability_delta": _delta_or_nan(
+            baseline_genotype_probs, occluded_genotype_probs, predicted_genotype_idx
+        ),
+        "baseline_actual_genotype_probability": float(baseline_genotype_probs[actual_genotype_idx]),
+        "occluded_actual_genotype_probability": _value_or_nan(occluded_genotype_probs, actual_genotype_idx),
+        "actual_genotype_probability_delta": _delta_or_nan(
+            baseline_genotype_probs, occluded_genotype_probs, actual_genotype_idx
+        ),
+        "baseline_predicted_genotype_logit": float(baseline_genotype_logits[predicted_genotype_idx]),
+        "occluded_predicted_genotype_logit": _value_or_nan(occluded_genotype_logits, predicted_genotype_idx),
+        "predicted_genotype_logit_delta": _delta_or_nan(
+            baseline_genotype_logits, occluded_genotype_logits, predicted_genotype_idx
+        ),
+        "baseline_actual_genotype_logit": float(baseline_genotype_logits[actual_genotype_idx]),
+        "occluded_actual_genotype_logit": _value_or_nan(occluded_genotype_logits, actual_genotype_idx),
+        "actual_genotype_logit_delta": _delta_or_nan(
+            baseline_genotype_logits, occluded_genotype_logits, actual_genotype_idx
+        ),
+        "baseline_predicted_cohort_probability": float(baseline_cohort_probs[predicted_cohort_idx]),
+        "occluded_predicted_cohort_probability": _value_or_nan(occluded_cohort_probs, predicted_cohort_idx),
+        "predicted_cohort_probability_delta": _delta_or_nan(
+            baseline_cohort_probs, occluded_cohort_probs, predicted_cohort_idx
+        ),
+        "baseline_actual_cohort_probability": float(baseline_cohort_probs[actual_cohort_idx]),
+        "occluded_actual_cohort_probability": _value_or_nan(occluded_cohort_probs, actual_cohort_idx),
+        "actual_cohort_probability_delta": _delta_or_nan(
+            baseline_cohort_probs, occluded_cohort_probs, actual_cohort_idx
+        ),
+        "baseline_predicted_cohort_logit": float(baseline_cohort_logits[predicted_cohort_idx]),
+        "occluded_predicted_cohort_logit": _value_or_nan(occluded_cohort_logits, predicted_cohort_idx),
+        "predicted_cohort_logit_delta": _delta_or_nan(
+            baseline_cohort_logits, occluded_cohort_logits, predicted_cohort_idx
+        ),
+        "baseline_actual_cohort_logit": float(baseline_cohort_logits[actual_cohort_idx]),
+        "occluded_actual_cohort_logit": _value_or_nan(occluded_cohort_logits, actual_cohort_idx),
+        "actual_cohort_logit_delta": _delta_or_nan(
+            baseline_cohort_logits, occluded_cohort_logits, actual_cohort_idx
+        ),
+    }
+
+
 def _state_dict_to_jsonable(module) -> dict[str, object]:
     return {
         key: value.detach().cpu().numpy().tolist()
@@ -461,7 +756,7 @@ def train_torch_sequence_meanpool(
     chain_stride = int(config.get("chain_stride", 1))
     gru_hidden_dim = int(config.get("gru_hidden_dim", embedding_dim))
     gru_layers = int(config.get("gru_layers", 1))
-    gru_bidirectional = str(config.get("gru_bidirectional", "false")).lower() in {"1", "true", "yes"}
+    gru_bidirectional = _as_bool(config.get("gru_bidirectional", False))
     attention_hidden_dim = int(config.get("attention_hidden_dim", embedding_dim))
     dropout = float(config.get("dropout", 0.1))
     cohort_loss_weight = float(config.get("cohort_loss_weight", 1.0))
