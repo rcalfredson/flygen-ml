@@ -553,6 +553,111 @@ python -m flygen_ml.cli.export_prediction_segments \
 This creates a plotting-ready segment table with prediction metadata prepended to
 each segment row.
 
+### Segment Occlusion For Sequence Models
+
+For trained PyTorch sequence holdout runs, segment occlusion estimates how much
+each between-reward trajectory contributes to a fly-level prediction. The
+workflow removes one segment at a time from each selected fly, reruns the model,
+and records probability/logit deltas for the genotype and cohort heads.
+
+First train a holdout sequence model so that `model_artifact.json` is available:
+
+```bash
+python -m flygen_ml.cli.train_sequence_model \
+  --config configs/model/segment_gru128_conv1d_headpool_fused_wide_long.yaml \
+  --sequences artifacts/sequences_v1.npz \
+  --output runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion \
+  --seed 0
+```
+
+Then run leave-one-segment-out occlusion on the validation flies:
+
+```bash
+python -m flygen_ml.cli.explain_sequence_occlusion \
+  --run-dir runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion \
+  --sequence-path artifacts/sequences_v1.npz \
+  --output-csv runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion/segment_occlusion_valid.csv \
+  --split valid
+```
+
+The output contains baseline and occluded probabilities/logits, predicted and
+actual class deltas, and flags indicating whether removing a segment changed the
+genotype, cohort, or joint prediction. Deltas are computed as:
+
+```text
+baseline value - occluded value
+```
+
+Thus, a positive logit delta means the removed segment supported the tracked
+class; a negative delta means the segment opposed the tracked class.
+
+To prepare visual-review subsets, filter rows by fly type, output head, sign of
+the logit delta, and optional correctness of the baseline prediction. For
+example, to review PFN>Kir antennae-intact flies where the genotype prediction
+was correct:
+
+```bash
+python -m flygen_ml.cli.filter_occlusion_segments \
+  --occlusion-csv runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion/segment_occlusion_valid.csv \
+  --output-dir runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion/structured_review/pfn_intact/genotype \
+  --deficiency pfn-intact \
+  --head genotype \
+  --require-correct genotype \
+  --max-segments-per-fly 3
+```
+
+Supported fly-type filters are:
+
+- `pfn-intact`: `PFN>Kir` + `antennae-intact`
+- `control-removed`: `Control>Kir` + `antennae-removed`
+- `control-intact`: `Control>Kir` + `antennae-intact`
+
+Supported correctness filters are `none`, `genotype`, `cohort`, and `joint`.
+The filter command writes separate positive and negative logit-delta CSVs.
+Positive rows support the tracked class; negative rows oppose it.
+
+A typical structured review matrix is:
+
+| fly type | head | correctness filter | question |
+| --- | --- | --- | --- |
+| `pfn-intact` | `genotype` | `genotype` | Which segments support or oppose the PFN>Kir genotype call when antennae are intact? |
+| `control-removed` | `cohort` | `cohort` | Which segments support or oppose the antennae-removed call when genotype is control? |
+| `control-intact` | `genotype` | `genotype` | Which segments support or oppose the Control>Kir genotype call in intact controls? |
+| `control-intact` | `cohort` | `cohort` | Which segments support or oppose the antennae-intact call in intact controls? |
+
+For quick dependency-light inspection, plot normalized tensor paths directly:
+
+```bash
+python -m flygen_ml.cli.plot_occlusion_segments \
+  --occlusion-csv runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion/structured_review/pfn_intact/genotype/pfn-intact_genotype_predicted_positive_logit_delta.csv \
+  --sequence-path artifacts/sequences_v1.npz \
+  --output-dir runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion/structured_review/pfn_intact/genotype/quick_plots_positive \
+  --change-head genotype \
+  --include-unchanged
+```
+
+To plot with external trajectory-plotting tools that need original frame
+metadata, join the filtered occlusion rows back to the segment table:
+
+```bash
+python -m flygen_ml.cli.export_occlusion_segments \
+  --occlusion-csv runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion/structured_review/pfn_intact/genotype/pfn-intact_genotype_predicted_positive_logit_delta.csv \
+  --segments artifacts/segments_with_cohort.csv \
+  --output runs/segment_gru128_conv1d_headpool_fused_wide_long_v1_holdout_for_occlusion/structured_review/pfn_intact/genotype/pfn-intact_genotype_predicted_positive_plot_ready.csv
+```
+
+This plot-ready CSV preserves occlusion evidence columns and adds source segment
+metadata such as `data_path`, `trx_path`, `experimental_fly_idx`,
+`anchor_reward_frame`, and `end_reward_frame`.
+
+Current limitation: occlusion currently explains saved holdout sequence runs.
+Grouped CV runs do not yet save fold-specific model artifacts, so validation
+flies from CV runs cannot yet be explained using the exact fold model that
+predicted them. For stronger systematic analysis, repeat holdout runs across
+seeds or extend CV training to save one model artifact per fold.
+
+### Prediction Error Comparison
+
 Compare the error sets from two saved prediction runs:
 
 ```bash
