@@ -112,6 +112,62 @@ def test_torch_segment_gru_encoder_preserves_ordered_segment_count():
     assert gru_embeddings.shape == (4, 5)
 
 
+def test_export_torch_sequence_embeddings_returns_segment_and_gru_unit_views():
+    from flygen_ml.modeling.torch_sequence_models import _build_module, export_torch_sequence_embeddings
+    from flygen_ml.modeling.sequence_models import FlySequenceExample
+
+    module = _build_module(
+        n_channels=2,
+        conv_channels=2,
+        embedding_dim=4,
+        n_side_features=0,
+        fusion_hidden_dim=5,
+        pooling="mean",
+        genotype_pooling=None,
+        cohort_pooling=None,
+        sequence_unit="segment_gru",
+        chain_length=1,
+        chain_stride=1,
+        gru_hidden_dim=5,
+        gru_layers=1,
+        gru_bidirectional=False,
+        attention_hidden_dim=3,
+        n_genotype_classes=2,
+        n_cohort_classes=2,
+        dropout=0.0,
+    )
+    x = np.random.default_rng(4).normal(size=(3, 8, 2)).astype(np.float32)
+    examples = [
+        FlySequenceExample(
+            fly_id="a0",
+            sample_key="s_a0",
+            genotype="A",
+            cohort="intact",
+            segment_indices=np.asarray([0, 1, 2]),
+            n_segments=3,
+            n_segments_with_qc_flags=0,
+        )
+    ]
+    model = {
+        "module": module,
+        "device": "cpu",
+        "input_means": np.zeros(2, dtype=np.float32),
+        "input_stds": np.ones(2, dtype=np.float32),
+        "embedding_dim": 4,
+        "sequence_unit": "segment_gru",
+        "gru_hidden_dim": 5,
+        "gru_bidirectional": False,
+        "eval_max_segments_per_fly": 0,
+    }
+
+    payload = export_torch_sequence_embeddings(x, examples, model=model, embedding_kind="both")
+
+    assert payload["segment_embeddings"].shape == (3, 4)
+    assert payload["unit_embeddings"].shape == (3, 5)
+    assert [row["segment_index"] for row in payload["rows"]] == [0, 1, 2]
+    assert [row["segment_position_in_fly"] for row in payload["rows"]] == [0, 1, 2]
+
+
 def _write_feature_fixture(path):
     path.write_text(
         "\n".join(

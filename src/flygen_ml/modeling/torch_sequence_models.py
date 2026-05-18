@@ -615,6 +615,108 @@ def explain_torch_sequence_segment_occlusion(
     return rows
 
 
+def export_torch_sequence_embeddings(
+    x: np.ndarray,
+    examples: list[FlySequenceExample],
+    *,
+    model: dict[str, object],
+    embedding_kind: str = "segment",
+) -> dict[str, object]:
+    requested_kinds = {embedding_kind}
+    if embedding_kind == "both":
+        requested_kinds = {"segment", "unit"}
+    unsupported = requested_kinds - {"segment", "unit"}
+    if unsupported:
+        raise ValueError(f"unsupported embedding_kind: {embedding_kind!r}")
+
+    torch, _ = _import_torch()
+    module = model["module"]
+    device = torch.device(str(model.get("device", "cpu")))
+    module.eval()
+    means = np.asarray(model["input_means"], dtype=np.float32)
+    stds = np.asarray(model["input_stds"], dtype=np.float32)
+    x_scaled = _scaled_sequences(x, means, stds)
+    max_segments_per_fly = int(model.get("eval_max_segments_per_fly", 0)) or None
+    sequence_unit = str(model.get("sequence_unit", "segment"))
+    if "unit" in requested_kinds and sequence_unit == "segment_chain":
+        raise ValueError(
+            "unit embedding export is not yet supported for sequence_unit='segment_chain' "
+            "because chain embeddings do not map one-to-one to source segments"
+        )
+
+    rows: list[dict[str, object]] = []
+    segment_embeddings: list[np.ndarray] = []
+    unit_embeddings: list[np.ndarray] = []
+    with torch.no_grad():
+        for example in examples:
+            selected_indices = _selected_eval_indices(
+                example,
+                max_segments_per_fly=max_segments_per_fly,
+                sequence_unit=sequence_unit,
+            )
+            segment_batch = torch.as_tensor(
+                x_scaled[selected_indices],
+                dtype=torch.float32,
+                device=device,
+            ).permute(0, 2, 1)
+            encoded_segments = module.encode_segments(segment_batch)
+            encoded_units = None
+            if "unit" in requested_kinds:
+                encoded_units = (
+                    encoded_segments
+                    if sequence_unit == "segment"
+                    else module.encode_units(segment_batch)
+                )
+            segment_position_by_index = {
+                int(segment_index): position
+                for position, segment_index in enumerate(example.segment_indices)
+            }
+            for eval_position, segment_index in enumerate(selected_indices):
+                rows.append(
+                    {
+                        "segment_index": int(segment_index),
+                        "segment_position_in_fly": int(segment_position_by_index[int(segment_index)]),
+                        "eval_position": int(eval_position),
+                        "fly_id": example.fly_id,
+                        "sample_key": example.sample_key,
+                        "genotype": example.genotype,
+                        "cohort": example.cohort,
+                        "n_segments": example.n_segments,
+                        "n_segments_with_qc_flags": example.n_segments_with_qc_flags,
+                        "selected_for_model_eval": True,
+                    }
+                )
+                if "segment" in requested_kinds:
+                    segment_embeddings.append(encoded_segments[eval_position].detach().cpu().numpy())
+                if encoded_units is not None:
+                    unit_embeddings.append(encoded_units[eval_position].detach().cpu().numpy())
+
+    payload: dict[str, object] = {
+        "rows": rows,
+        "embedding_kind": embedding_kind,
+        "sequence_unit": sequence_unit,
+    }
+    if "segment" in requested_kinds:
+        dim = int(model["embedding_dim"])
+        payload["segment_embeddings"] = (
+            np.stack(segment_embeddings).astype(np.float32)
+            if segment_embeddings
+            else np.zeros((0, dim), dtype=np.float32)
+        )
+    if "unit" in requested_kinds:
+        unit_dim = (
+            int(model["gru_hidden_dim"]) * (2 if _as_bool(model.get("gru_bidirectional", False)) else 1)
+            if sequence_unit == "segment_gru"
+            else int(model["embedding_dim"])
+        )
+        payload["unit_embeddings"] = (
+            np.stack(unit_embeddings).astype(np.float32)
+            if unit_embeddings
+            else np.zeros((0, unit_dim), dtype=np.float32)
+        )
+    return payload
+
+
 def _delta_or_nan(baseline: np.ndarray, occluded: np.ndarray | None, idx: int) -> float:
     if occluded is None:
         return float("nan")
